@@ -41,7 +41,7 @@ class CVESearch(callbacks.Plugin):
     """Search and display CVE information from Circl CVE database."""
 
     def _get_cve_info(self, cve_id):
-        if not cve_id.startswith('CVE-'):
+        if not cve_id.upper().startswith('CVE-'):
             cve_id = 'CVE-' + cve_id
 
         url = f"https://cve.circl.lu/cve/{cve_id}"
@@ -58,7 +58,7 @@ class CVESearch(callbacks.Plugin):
             last_modified = tree.xpath('//td[@class="warning"][contains(text(), "Last modified")]/following-sibling::td[@class="info"]/text()')[0].strip()
 
             output_lines = [
-                ircutils.mircColor(f"CVE-{cve_id}", 'teal') + " - " + f"{ircutils.bold('Summary:')} {summary}",
+                ircutils.mircColor(f"{cve_id}", 'teal') + " - " + f"{ircutils.bold('Summary:')} {summary}",
                 ircutils.bold("Last Major Update:") + f" {last_major_update}",
                 ircutils.bold("Published:") + f" {published}",
                 ircutils.bold("Last Modified:") + f" {last_modified}",

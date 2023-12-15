@@ -52,7 +52,7 @@ class CVESearch(callbacks.Plugin):
 
             # Check if the CVE does not exist
             if tree.xpath('//h1[text()="This CVE does not exist"]'):
-                return f"Error: CVE-{cve_id} does not exist."
+                return f"Error: {cve_id} does not exist."
 
             # Extract summary information
             summary_elements = tree.xpath('//td[@class="warning"][contains(text(), "Summary")]/following-sibling::td[@class="info"]/text()')

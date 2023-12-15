@@ -50,13 +50,25 @@ class CVESearch(callbacks.Plugin):
         if response.status_code == 200:
             tree = html.fromstring(response.content)
 
+            # Check if the CVE does not exist
+            if tree.xpath('//h1[text()="This CVE does not exist"]'):
+                return f"Error: CVE-{cve_id} does not exist."
+
+            # Extract summary information
             summary_elements = tree.xpath('//td[@class="warning"][contains(text(), "Summary")]/following-sibling::td[@class="info"]/text()')
             summary = summary_elements[0].strip() if summary_elements else "Summary not found"
 
-            last_major_update = tree.xpath('//td[@class="warning"][contains(text(), "Last major update")]/following-sibling::td[@class="info"]/text()')[0].strip()
-            published = tree.xpath('//td[@class="warning"][contains(text(), "Published")]/following-sibling::td[@class="info"]/text()')[0].strip()
-            last_modified = tree.xpath('//td[@class="warning"][contains(text(), "Last modified")]/following-sibling::td[@class="info"]/text()')[0].strip()
+            # Extract other information
+            last_major_update_elements = tree.xpath('//td[@class="warning"][contains(text(), "Last major update")]/following-sibling::td[@class="info"]/text()')
+            last_major_update = last_major_update_elements[0].strip() if last_major_update_elements else "Information not available"
 
+            published_elements = tree.xpath('//td[@class="warning"][contains(text(), "Published")]/following-sibling::td[@class="info"]/text()')
+            published = published_elements[0].strip() if published_elements else "Information not available"
+
+            last_modified_elements = tree.xpath('//td[@class="warning"][contains(text(), "Last modified")]/following-sibling::td[@class="info"]/text()')
+            last_modified = last_modified_elements[0].strip() if last_modified_elements else "Information not available"
+
+            # Construct the output message with formatting
             output_lines = [
                 ircutils.mircColor(f"{cve_id}", 'teal') + " - " + f"{ircutils.bold('Summary:')} {summary}",
                 ircutils.bold("Last Major Update:") + f" {last_major_update}",
@@ -66,7 +78,8 @@ class CVESearch(callbacks.Plugin):
             ]
             return ' - '.join(output_lines)
         else:
-            return f"Error: Unable to fetch information for CVE {cve_id}"
+            error_message = f"Error: Unable to fetch information for CVE {cve_id}. Status Code: {response.status_code}"
+            return ircutils.mircColor(error_message, 'red')
 
     @wrap(["text"])
     def cve(self, irc, msg, args, cve_id):

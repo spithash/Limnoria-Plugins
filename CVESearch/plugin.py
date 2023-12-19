@@ -38,7 +38,7 @@ _ = PluginInternationalization('CVESearch')
 
 
 class CVESearch(callbacks.Plugin):
-    """Search and display CVE information from Circl CVE database."""
+    """Search and display information from NVD NIST Common Vulnerabilities and Exposures database."""
 
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
@@ -84,11 +84,10 @@ class CVESearch(callbacks.Plugin):
     @wrap(["text"])
     def cve(self, irc, msg, args, cve_id):
         """<CVE ID>
-        Display information about a CVE."""
+        Display information about a CVE (Common Vulnerabilities and Exposures)."""
         irc.reply(self._get_cve_info(cve_id))
 
 
 Class = CVESearch
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:
-

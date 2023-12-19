@@ -58,10 +58,19 @@ class CVESearch(callbacks.Plugin):
             description_elements = tree.xpath('//h3[@data-testid="vuln-description-title" and contains(text(),"Description")]/following-sibling::p[@data-testid="vuln-description"]/text()')
             description = description_elements[0].strip() if description_elements else "Description not found"
 
+            # Extract NVD Published Date
+            published_date_elements = tree.xpath('//strong[contains(text(),"Published Date:")]/following-sibling::span[@data-testid="vuln-published-on"]//text()')
+            published_date = ' '.join(published_date_elements).strip() if published_date_elements else "N/A"
+            last_modified_elements = tree.xpath('//strong[contains(text(),"Last Modified:")]/following-sibling::span[@data-testid="vuln-last-modified-on"]//text()')
+            last_modified = ' '.join(last_modified_elements).strip() if last_modified_elements else "N/A"
+
+
             # Construct the output message with formatting
             output_lines = [
                 ircutils.mircColor(f"{cve_id}", 'teal') + " - " +
                 f"{ircutils.bold('Description:')} {description}",
+                ircutils.bold("Published Date:") + f" {published_date}",
+                ircutils.bold("Last Modified Date:") + f" {last_modified}",
                 ircutils.bold("URL:") + f" {url}"
             ]
             return ' - '.join(output_lines)
@@ -78,3 +87,4 @@ class CVESearch(callbacks.Plugin):
 Class = CVESearch
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:
+

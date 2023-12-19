@@ -1,1 +1,1 @@
-Search for CVE vulnerabilities on https://cve.circl.lu
+Search for CVE vulnerabilities on https://nvd.nist.gov/vuln

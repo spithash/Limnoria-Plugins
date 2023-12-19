@@ -78,7 +78,7 @@ class CVESearch(callbacks.Plugin):
             ]
             return ' - '.join(output_lines)
         else:
-            error_message = f"Error: Unable to fetch information for CVE {cve_id}. Status Code: {response.status_code}"
+            error_message = f"Error: Unable to fetch information for {cve_id}. Status Code: {response.status_code}"
             return ircutils.mircColor(error_message, 'red')
 
     @wrap(["text"])

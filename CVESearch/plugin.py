@@ -40,12 +40,15 @@ _ = PluginInternationalization('CVESearch')
 class CVESearch(callbacks.Plugin):
     """Search and display CVE information from Circl CVE database."""
 
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
     def _get_cve_info(self, cve_id):
         if not cve_id.upper().startswith('CVE-'):
             cve_id = 'CVE-' + cve_id
 
         url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
-        response = requests.get(url)
+        headers = {'User-Agent': self.USER_AGENT}
+        response = requests.get(url, headers=headers)
 
         if response.status_code == 200:
             tree = html.fromstring(response.content)
@@ -83,6 +86,7 @@ class CVESearch(callbacks.Plugin):
         """<CVE ID>
         Display information about a CVE."""
         irc.reply(self._get_cve_info(cve_id))
+
 
 Class = CVESearch
 

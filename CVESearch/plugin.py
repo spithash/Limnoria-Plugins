@@ -44,7 +44,7 @@ class CVESearch(callbacks.Plugin):
         if not cve_id.upper().startswith('CVE-'):
             cve_id = 'CVE-' + cve_id
 
-        url = f"https://cve.circl.lu/cve/{cve_id}"
+        url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
         response = requests.get(url)
 
         if response.status_code == 200:
@@ -54,26 +54,14 @@ class CVESearch(callbacks.Plugin):
             if tree.xpath('//h1[text()="This CVE does not exist"]'):
                 return f"Error: {cve_id} does not exist."
 
-            # Extract summary information
-            summary_elements = tree.xpath('//td[@class="warning"][contains(text(), "Summary")]/following-sibling::td[@class="info"]/text()')
-            summary = summary_elements[0].strip() if summary_elements else "Summary not found"
-
-            # Extract other information
-            last_major_update_elements = tree.xpath('//td[@class="warning"][contains(text(), "Last major update")]/following-sibling::td[@class="info"]/text()')
-            last_major_update = last_major_update_elements[0].strip() if last_major_update_elements else "Information not available"
-
-            published_elements = tree.xpath('//td[@class="warning"][contains(text(), "Published")]/following-sibling::td[@class="info"]/text()')
-            published = published_elements[0].strip() if published_elements else "Information not available"
-
-            last_modified_elements = tree.xpath('//td[@class="warning"][contains(text(), "Last modified")]/following-sibling::td[@class="info"]/text()')
-            last_modified = last_modified_elements[0].strip() if last_modified_elements else "Information not available"
+            # Extract description information
+            description_elements = tree.xpath('//h3[@data-testid="vuln-description-title" and contains(text(),"Description")]/following-sibling::p[@data-testid="vuln-description"]/text()')
+            description = description_elements[0].strip() if description_elements else "Description not found"
 
             # Construct the output message with formatting
             output_lines = [
-                ircutils.mircColor(f"{cve_id}", 'teal') + " - " + f"{ircutils.bold('Summary:')} {summary}",
-                ircutils.bold("Last Major Update:") + f" {last_major_update}",
-                ircutils.bold("Published:") + f" {published}",
-                ircutils.bold("Last Modified:") + f" {last_modified}",
+                ircutils.mircColor(f"{cve_id}", 'teal') + " - " +
+                f"{ircutils.bold('Description:')} {description}",
                 ircutils.bold("URL:") + f" {url}"
             ]
             return ' - '.join(output_lines)

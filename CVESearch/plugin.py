@@ -83,7 +83,7 @@ class CVESearch(callbacks.Plugin):
 
     @wrap(["text"])
     def cve(self, irc, msg, args, cve_id):
-        """<CVE ID>
+        """<CVE-ID>
         Display information about a CVE (Common Vulnerabilities and Exposures)."""
         irc.reply(self._get_cve_info(cve_id))
 

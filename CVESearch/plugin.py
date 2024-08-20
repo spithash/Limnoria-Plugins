@@ -29,8 +29,9 @@
 ###
 
 from supybot import ircutils, callbacks
-from supybot.commands import *
+from supybot.commands import wrap
 from supybot.i18n import PluginInternationalization
+import re
 import requests
 from lxml import html
 
@@ -41,6 +42,8 @@ class CVESearch(callbacks.Plugin):
     """Search and display information from NVD NIST Common Vulnerabilities and Exposures database."""
 
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    CVE_PATTERN = re.compile(r'\bCVE-\d{4}-\d{4,7}\b', re.IGNORECASE)
+    URL_PATTERN = re.compile(r'https?://\S+', re.IGNORECASE)
 
     def _get_cve_info(self, cve_id):
         if not cve_id.upper().startswith('CVE-'):
@@ -67,7 +70,6 @@ class CVESearch(callbacks.Plugin):
             last_modified_elements = tree.xpath('//strong[contains(text(),"Last Modified:")]/following-sibling::span[@data-testid="vuln-last-modified-on"]//text()')
             last_modified = ' '.join(last_modified_elements).strip() if last_modified_elements else "N/A"
 
-
             # Construct the output message with formatting
             output_lines = [
                 ircutils.mircColor(f"{cve_id}", 'teal') + " - " +
@@ -86,6 +88,20 @@ class CVESearch(callbacks.Plugin):
         """<CVE-ID>
         Display information about a CVE (Common Vulnerabilities and Exposures)."""
         irc.reply(self._get_cve_info(cve_id))
+
+    def doPrivmsg(self, irc, msg):
+        # Extract the text content from the message
+        text = msg.args[1]
+
+        # Avoid processing the message if it starts with the @cve command (to prevent double-triggering)
+        if text.startswith('@cve'):
+            return
+
+        # Check if the message contains a CVE identifier pattern and does not look like a URL
+        if not self.URL_PATTERN.search(text):
+            matches = self.CVE_PATTERN.findall(text)
+            for cve_id in matches:
+                irc.reply(self._get_cve_info(cve_id))
 
 
 Class = CVESearch

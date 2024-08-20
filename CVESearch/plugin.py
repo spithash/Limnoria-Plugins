@@ -97,8 +97,8 @@ class CVESearch(callbacks.Plugin):
         # Extract the text content from the message
         text = msg.args[1]
 
-        # Avoid processing the message if it starts with the @cve command (to prevent double-triggering)
-        if text.startswith('@cve'):
+        # Ignore any command, no matter the prefix char
+        if callbacks.addressed(irc, msg):
             return
 
         # Check if the message contains a CVE identifier pattern and is not a URL (http*)

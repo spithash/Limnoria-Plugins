@@ -34,6 +34,7 @@ from supybot.i18n import PluginInternationalization
 import re
 import requests
 from lxml import html
+import html as html_parser
 
 _ = PluginInternationalization('CVESearch')
 
@@ -61,8 +62,12 @@ class CVESearch(callbacks.Plugin):
                 return f"Error: {cve_id} does not exist."
 
             # Extract description information
-            description_elements = tree.xpath('//h3[@data-testid="vuln-description-title" and contains(text(),"Description")]/following-sibling::p[@data-testid="vuln-description"]/text()')
-            description = description_elements[0].strip() if description_elements else "Description not found"
+            description_elements = tree.xpath('//p[@data-testid="vuln-description"]')
+            description = ''.join([el.text_content().strip() for el in description_elements])
+            description = html_parser.unescape(description)  # Convert HTML entities to plain text
+
+            # Remove multiple newlines and extra whitespace
+            description = re.sub(r'\s+', ' ', description).strip()
 
             # Extract NVD Published Date
             published_date_elements = tree.xpath('//strong[contains(text(),"Published Date:")]/following-sibling::span[@data-testid="vuln-published-on"]//text()')

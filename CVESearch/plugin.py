@@ -90,6 +90,10 @@ class CVESearch(callbacks.Plugin):
         irc.reply(self._get_cve_info(cve_id))
 
     def doPrivmsg(self, irc, msg):
+        # Check if the message is sent to a channel
+        if not irc.isChannel(msg.args[0]):
+            return
+
         # Extract the text content from the message
         text = msg.args[1]
 

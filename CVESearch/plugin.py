@@ -97,7 +97,7 @@ class CVESearch(callbacks.Plugin):
         if text.startswith('@cve'):
             return
 
-        # Check if the message contains a CVE identifier pattern and does not look like a URL
+        # Check if the message contains a CVE identifier pattern and is not a URL (http*)
         if not self.URL_PATTERN.search(text):
             matches = self.CVE_PATTERN.findall(text)
             for cve_id in matches:

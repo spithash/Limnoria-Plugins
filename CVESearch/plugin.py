@@ -96,11 +96,11 @@ class CVESearch(callbacks.Plugin):
 
     def doPrivmsg(self, irc, msg):
         # Check if the message is sent to a channel
-        if not irc.isChannel(msg.args[0]):
+        if not irc.isChannel(msg.channel):
             return
 
         
-        channel = msg.args[0]
+        channel = msg.channel
         network = irc.network
 
         # Check if the cveSnarfer is enabled for this channel and network

@@ -99,6 +99,14 @@ class CVESearch(callbacks.Plugin):
         if not irc.isChannel(msg.args[0]):
             return
 
+        
+        channel = msg.args[0]
+        network = irc.network
+
+        # Check if the cveSnarfer is enabled for this channel and network
+        if not self.registryValue('cveSnarfer', channel, network):
+            return
+
         # Extract the text content from the message
         text = msg.args[1]
 

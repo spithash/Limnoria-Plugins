@@ -47,10 +47,12 @@ def configure(advanced):
     conf.registerPlugin('CVESearch', True)
 
 
-CVESearch = conf.registerPlugin('CVESearch')
 # This is where your configuration variables (if any) should go.  For example:
 # conf.registerGlobalValue(CVESearch, 'someConfigVariableName',
 #     registry.Boolean(False, _("""Help for someConfigVariableName.""")))
+CVESearch = conf.registerPlugin('CVESearch')
+conf.registerChannelValue(CVESearch, 'cveSnarfer',
+    registry.Boolean(False, _("""Determines whether the bot will output CVE information when it sees a CVE ID mentioned in the channel.""")))
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

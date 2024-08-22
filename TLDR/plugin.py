@@ -28,20 +28,55 @@
 
 ###
 
+import subprocess
+import re
 from supybot import utils, plugins, ircutils, callbacks
 from supybot.commands import *
 from supybot.i18n import PluginInternationalization
 
-
 _ = PluginInternationalization('TLDR')
-
 
 class TLDR(callbacks.Plugin):
     """TLDR, A simplified alternative to man pages for Limnoria (a.k.a supybot)"""
     threaded = True
 
+    def tldr(self, irc, msg, args, command):
+        """<command>
+        Shows a TLDR summary of the given command.
+        """
+        try:
+            # Execute the tldr command
+            result = subprocess.run(['tldr', command], capture_output=True, text=True)
+            if result.returncode != 0:
+                irc.reply(f"Error: {result.stderr.strip()}")
+                return
+
+            # Clean up the output to handle ANSI colors for IRC
+            output = result.stdout
+
+            # Remove ANSI color codes
+            ansi_escape = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
+            clean_output = ansi_escape.sub('', output)
+
+            # Process lines to apply formatting
+            for line in clean_output.splitlines():
+                if line.strip():  # Skip empty lines
+                    # Check if the line is a comment (starts with "- " and ends with ":")
+                    if re.match(r'^- .+:$', line.strip()):
+                        # Make comments green
+                        line = ircutils.mircColor(line, 'green')
+                    else:
+                        # Bold the matching words (command-related)
+                        line = re.sub(rf'\b{re.escape(command)}\b', ircutils.bold(ircutils.mircColor(command, 'white')), line)
+
+                    irc.reply(line)
+
+        except Exception as e:
+            irc.reply(f"An error occurred: {str(e)}")
+
+    tldr = wrap(tldr, ['text'])
 
 Class = TLDR
 
-
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:
+

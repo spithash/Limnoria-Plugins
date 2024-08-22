@@ -48,7 +48,10 @@ class TLDR(callbacks.Plugin):
             # Execute the tldr command
             result = subprocess.run(['tldr', command], capture_output=True, text=True)
             if result.returncode != 0:
-                irc.reply(f"Error: {result.stderr.strip()}")
+                # Error message handling
+                error_message = result.stderr.strip()
+                for line in error_message.splitlines():
+                    irc.reply(f"Error: {line}")
                 return
 
             # Clean up the output to handle ANSI colors for IRC

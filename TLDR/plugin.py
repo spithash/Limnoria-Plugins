@@ -40,13 +40,33 @@ class TLDR(callbacks.Plugin):
     """TLDR, A simplified alternative to man pages for Limnoria (a.k.a supybot)"""
     threaded = True
 
+    def sanitize_command(self, command):
+        """Sanitize the command to remove unwanted switches."""
+        valid_switches = set([
+            '-h', '--help', '-v', '--version', '-u', '--update_cache',
+            '-p', '--platform', '-l', '--list', '-s', '--search',
+            '-s', '--source', '-c', '--color', '-r', '--render',
+            '-L', '--language', '-m', '--markdown', '--print-completion'
+        ])
+        
+        # Split command by spaces to handle arguments
+        parts = command.split()
+        
+        # Retain only valid switches and the command itself
+        sanitized_parts = [part for part in parts if not part.startswith(tuple(valid_switches))]
+        
+        return ' '.join(sanitized_parts)
+
     def tldr(self, irc, msg, args, command):
         """<command>
         Shows a TLDR summary of the given command.
         """
         try:
-            # Execute the tldr command
-            result = subprocess.run(['tldr', command], capture_output=True, text=True)
+            # Sanitize the command to remove unwanted switches
+            sanitized_command = self.sanitize_command(command)
+            
+            # Execute the tldr command with -c switch to enforce color output
+            result = subprocess.run(['tldr', '-c'] + sanitized_command.split(), capture_output=True, text=True)
             if result.returncode != 0:
                 # Error message handling
                 error_message = result.stderr.strip()
@@ -54,24 +74,10 @@ class TLDR(callbacks.Plugin):
                     irc.reply(f"Error: {line}")
                 return
 
-            # Clean up the output to handle ANSI colors for IRC
+            # Print raw ANSI codes to IRC without additional text
             output = result.stdout
-
-            # Remove ANSI color codes
-            ansi_escape = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
-            clean_output = ansi_escape.sub('', output)
-
-            # Process lines to apply formatting
-            for line in clean_output.splitlines():
+            for line in output.splitlines():
                 if line.strip():  # Skip empty lines
-                    # Check if the line is a comment (starts with "- " and ends with ":")
-                    if re.match(r'^- .+:$', line.strip()):
-                        # Make comments green
-                        line = ircutils.mircColor(line, 'green')
-                    else:
-                        # Bold the matching words (command-related)
-                        line = re.sub(rf'\b{re.escape(command)}\b', ircutils.bold(ircutils.mircColor(command, 'white')), line)
-
                     irc.reply(line)
 
         except Exception as e:

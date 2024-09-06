@@ -40,37 +40,36 @@ class TLDR(callbacks.Plugin):
     """TLDR, A simplified alternative to man pages for Limnoria (a.k.a supybot)"""
     threaded = True
 
-    def sanitize_command(self, command):
-        """Sanitize the command to remove unwanted switches."""
+    def detect_invalid_switches(self, command):
+        """Detect invalid switches and return a list of them."""
         valid_switches = set([
             '-h', '--help', '-v', '--version', '-u', '--update_cache',
             '-p', '--platform', '-l', '--list', '-s', '--search',
             '-s', '--source', '-c', '--color', '-r', '--render',
             '-L', '--language', '-m', '--markdown', '--print-completion'
         ])
-
+        
         # Split command by spaces to handle arguments
         parts = command.split()
         
-        # Check if any part of the command is an invalid switch
-        for part in parts:
-            if part in valid_switches:
-                return True  # Indicates invalid switch used
-
-        return False
+        # Find invalid switches
+        invalid_switches = [part for part in parts if part in valid_switches]
+        
+        return invalid_switches
 
     def tldr(self, irc, msg, args, command):
         """<command>
         Shows a TLDR summary of the given command.
         """
         try:
-            # Check for invalid switches
-            if self.sanitize_command(command):
+            # Detect invalid switches
+            invalid_switches = self.detect_invalid_switches(command)
+            if invalid_switches:
                 irc.reply("Error: use of switches is not allowed.")
                 return
             
-            # Sanitize the command to remove unwanted switches
-            sanitized_command = ' '.join(part for part in command.split() if part not in self.sanitize_command(command))
+            # Remove invalid switches from the command
+            sanitized_command = ' '.join(part for part in command.split() if part not in invalid_switches)
             
             # Execute the tldr command with -c switch to enforce color output
             result = subprocess.run(['tldr', '-c'] + sanitized_command.split(), capture_output=True, text=True)

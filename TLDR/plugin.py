@@ -36,6 +36,14 @@ from supybot.i18n import PluginInternationalization
 
 _ = PluginInternationalization('TLDR')
 
+# ANSI to IRC color mapping
+x16colors = {
+    "30": "1", "31": "4", "32": "3", "33": "11", 
+    "34": "12", "35": "5", "36": "14", "37": "15",
+    "90": "8", "91": "4", "92": "3", "93": "11",
+    "94": "12", "95": "5", "96": "14", "97": "15",
+}
+
 class TLDR(callbacks.Plugin):
     """TLDR, A simplified alternative to man pages for Limnoria (a.k.a supybot)"""
     threaded = True
@@ -56,6 +64,17 @@ class TLDR(callbacks.Plugin):
         invalid_switches = [part for part in parts if part in valid_switches]
         
         return invalid_switches
+
+    def process_ansi(self, ansi):
+        """Convert ANSI color codes to IRC color codes."""
+        colors = []
+        ansi = ansi.strip("\x1b[").strip("m").split(";")
+        for code in ansi:
+            if code == "0":
+                colors.append("\x0F")  # Reset
+            elif code in x16colors:
+                colors.append(f"\x03{x16colors[code]}")  # Normal color
+        return ''.join(colors)
 
     def tldr(self, irc, msg, args, command):
         """<command>
@@ -80,10 +99,30 @@ class TLDR(callbacks.Plugin):
                     irc.reply(f"Error: {line}")
                 return
 
-            # Print raw ANSI codes to IRC without additional text
+            # Process output for ANSI to IRC conversion
             output = result.stdout
+            processed_output = ""
+            current_color = "\x0F"  # Default to reset
+
             for line in output.splitlines():
                 if line.strip():  # Skip empty lines
+                    # Replace ANSI escape sequences
+                    ansi_codes = re.findall(r'\x1B\[(\d+(;\d+)*)m', line)
+                    for ansi_code in ansi_codes:
+                        # Convert and append the corresponding IRC colors
+                        irc_color = self.process_ansi(ansi_code[0])
+                        if irc_color:
+                            current_color = irc_color
+                        line = line.replace(f"\x1B[{ansi_code[0]}m", current_color)
+
+                    # Handle any remaining reset codes
+                    line = line.replace("\x1B[0m", "\x0F")  # Reset
+
+                    processed_output += line + '\n'
+
+            # Send the processed output to the IRC channel
+            for line in processed_output.splitlines():
+                if line.strip():
                     irc.reply(line)
 
         except Exception as e:

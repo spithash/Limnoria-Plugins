@@ -1,12 +1,12 @@
-The classic game of IRC Duck Hunt.
+The classic game of IRC Duck Hunt with emojis!
 
-Forked from https://github.com/veggiematts/supybot-duckhunt
+Forked from https://github.com/oddluck/limnoria-plugins/tree/master/DuckHunt
 
 Requires Python3, Limnoria.
 
 Python 3 and score fixes. Plugin working.
 
-\_o< ~ DuckHunt game for supybot ~ >o_/
+\_o< ~ Emoji Enhanced DuckHunt game for supybot ~ >o_/
 =======================================
 
 How to play
@@ -36,6 +36,3 @@ Several per-channel configuration variables are available (look at the "channel"
  * autoFriday: Do we need to automatically launch more ducks on friday?
  * missProbability: The probability to miss the duck
 
-Update
-------
-Get latest version at : https://github.com/veggiematts/supybot-duckhunt

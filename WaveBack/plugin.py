@@ -48,8 +48,7 @@ class WaveBack(callbacks.Plugin):
             'yo', 'what\'s up', 'hiya', 'good day', 'morning', 'evening',
             'afternoon', 'salutations', 'bonjour', 'hallo', 'namaste',
             'shalom', 'ciao', 'aloha', 'hey there', 'hi there', 'ahoy',
-            'wassup', 'whazzup', 'how are you', 'how\'s it going', 'what\'s new',
-	    'hi all', 'hello to all', 'what\'s up everyone'
+            'wassup', 'whazzup', 'how are you', 'how\'s it going', 'what\'s new'
         ]
         # List of dynamic replies
         self.dynamic_replies = [
@@ -107,9 +106,14 @@ class WaveBack(callbacks.Plugin):
                             reply = random.choice(self.dynamic_replies)
                             irc.reply(reply)
                             return  # Exit once a reply is sent
-
+                else:
+                    self.log.debug("WaveBack: Message content is not a string.")
+            else:
+                self.log.debug(f"WaveBack: Channel {channel} is not in enabledChannels.")
+                
             # If no greeting is found or not in enabled channel
             self.log.debug(f"WaveBack: No reply triggered for message.")
+
         except Exception as e:
             self.log.error(f"WaveBack: Error in doPrivmsg: {e}")
 

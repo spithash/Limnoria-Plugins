@@ -43,15 +43,22 @@ class WaveBack(callbacks.Plugin):
         self.__parent = super(WaveBack, self)
         self.__parent.__init__(irc)
         self.enabled_channels = conf.supybot.plugins.WaveBack.enabledChannels()
-        # Enriched greetings list
+
+        # Enriched greetings list (doubled size)
         self.greetings_keywords = [
             'hello', 'hi', 'hey', 'howdy', 'hola', 'greetings', 'sup',
             'yo', 'what\'s up', 'hiya', 'good day', 'morning', 'evening',
             'afternoon', 'salutations', 'bonjour', 'hallo', 'namaste',
             'shalom', 'ciao', 'aloha', 'hey there', 'hi there', 'ahoy',
-            'wassup', 'whazzup', 'how are you', 'how\'s it going', 'what\'s new'
+            'wassup', 'whazzup', 'how are you', 'how\'s it going', 'what\'s new',
+            'what\'s happening', 'how\'s life', 'peace', 'hiii', 'heya',
+            'hiya there', 'how are ya', 'yo yo', 'hey yo', 'wassup yo',
+            'how\'s everyone', 'what\'s good', 'how\'s your day', 'how\'s your night',
+            'good evening', 'good morning', 'good afternoon', 'aloha friends',
+            'cheerio', 'howdy y\'all', 'what\'s crackin', 'holler', 'what\'s poppin'
         ]
-        # List of dynamic replies
+
+        # List of dynamic replies (doubled size)
         self.dynamic_replies = [
             "Hello, how can I help you today?",
             "Hi there! What’s up?",
@@ -72,9 +79,36 @@ class WaveBack(callbacks.Plugin):
             "Hey! Got something to discuss?",
             "Aloha! How can I help you?",
             "Hiya! What’s the task?",
-            "Hello! Anything I can assist with?"
+            "Hello! Anything I can assist with?",
+            "Howdy partner! Need some help?",
+            "Hi there, friend! How’s life?",
+            "Hello, how are things?",
+            "Greetings, traveler! What’s your query?",
+            "Hey, how’s it going?",
+            "Hola, amigo! Anything on your mind?",
+            "Good day, friend! Need something?",
+            "Hey hey! What’s new?",
+            "Ahoy, matey! What’s the task?",
+            "Yo yo! How can I help?",
+            "Hey, how’s your day?",
+            "Namaste, my friend! Need a hand?",
+            "Howdy-do! How can I assist?",
+            "Hey, what’s cooking?",
+            "Hi! How’s everything?",
+            "Good morning! How can I help?",
+            "Good evening! Need anything?",
+            "Hello again! What’s up?",
+            "Hey there, buddy! What’s on your mind?",
+            "Hi hi! Got any questions?",
+            "What’s new today? How can I help?",
+            "Greetings, earthling! Need help?",
+            "Aloha! What can I do for you?",
+            "Hello, dear friend! How’s it going?",
+            "Yo yo! Got something to share?",
+            "Hiya, mate! How’s everything?",
+            "Hey, cool cat! What’s shaking?",
+            "Howdy, champ! Need a hand?"
         ]
-
 
     def doPrivmsg(self, irc, msg):
         """Respond to greetings."""

@@ -34,6 +34,7 @@ import supybot.callbacks as callbacks
 import supybot.conf as conf
 import supybot.registry as registry
 import random
+import re
 
 class WaveBack(callbacks.Plugin):
     """A friendly bot that responds to greetings."""
@@ -74,6 +75,7 @@ class WaveBack(callbacks.Plugin):
             "Hello! Anything I can assist with?"
         ]
 
+
     def doPrivmsg(self, irc, msg):
         """Respond to greetings."""
         try:
@@ -95,24 +97,26 @@ class WaveBack(callbacks.Plugin):
             if channel in self.enabled_channels:
                 self.log.debug(f"WaveBack: Channel {channel} is enabled")
 
-                # Check if message content is a string and contains a greeting keyword
+                # Check if message content is a string
                 if isinstance(message_content, str):
                     self.log.debug(f"WaveBack: Checking message content for greetings...")
 
-                    # Check against greetings_keywords
+                    # Tokenize message into words (case-insensitive)
+                    words = re.findall(r'\b\w+\b', message_content.lower())
+
+                    # Check if any greeting keyword matches
                     for keyword in self.greetings_keywords:
-                        if keyword in message_content.lower():
+                        if keyword in words:  # Match as whole word only
                             self.log.debug(f"WaveBack: Found keyword '{keyword}' in message.")
                             reply = random.choice(self.dynamic_replies)
                             irc.reply(reply)
                             return  # Exit once a reply is sent
+
+                    self.log.debug("WaveBack: No matching greeting found.")
                 else:
                     self.log.debug("WaveBack: Message content is not a string.")
             else:
                 self.log.debug(f"WaveBack: Channel {channel} is not in enabledChannels.")
-                
-            # If no greeting is found or not in enabled channel
-            self.log.debug(f"WaveBack: No reply triggered for message.")
 
         except Exception as e:
             self.log.error(f"WaveBack: Error in doPrivmsg: {e}")

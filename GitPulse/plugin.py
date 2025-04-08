@@ -43,7 +43,7 @@ class GitPulse(callbacks.Plugin):
         self.start_polling()
 
     def start_polling(self):
-        """Start polling GitHub for events in a separate thread."""
+        """Start polling GitHub for commits in a separate thread."""
         def poll():
             while True:
                 for repo in self.subscriptions:
@@ -53,57 +53,54 @@ class GitPulse(callbacks.Plugin):
         Thread(target=poll, daemon=True).start()
 
     def fetch_and_announce(self, repo):
-        """Fetch GitHub events for a repository and announce them."""
+        """Fetch GitHub commits for a repository and announce them."""
         github_token = self.registryValue('githubToken')
         headers = {}
         if github_token:
             headers['Authorization'] = f'token {github_token}'
 
-        url = f"https://api.github.com/repos/{repo}/events"
-        params = {'per_page': 100}  # Adjust as necessary
-        all_events = []
+        url = f"https://api.github.com/repos/{repo}/commits"
+        params = {'per_page': 5}  # Fetch the latest 5 commits
+        all_commits = []
 
         # Handle paginated results
         while url:
             response = requests.get(url, headers=headers, params=params)
             if response.status_code == 200:
-                events = response.json()
-                all_events.extend(events)
+                commits = response.json()
+                all_commits.extend(commits)
                 # Get next page URL from the response headers
                 url = response.links.get('next', {}).get('url', None)
             else:
-                self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")
+                self.log.error(f"Failed to fetch commits for {repo}: {response.status_code}")
                 return
 
-        if all_events:
-            new_events = [event for event in all_events if self.is_new_event(event, repo)]
-            if new_events:
-                for event in new_events:
-                    message = self.format_event(event)
+        if all_commits:
+            new_commits = [commit for commit in all_commits if self.is_new_commit(commit, repo)]
+            if new_commits:
+                for commit in new_commits:
+                    message = self.format_commit(commit)
                     self.announce(message)
             else:
-                self.log.info(f"No new events for {repo}.")
+                self.log.info(f"No new commits for {repo}.")
         else:
-            self.log.info(f"No events found for {repo}.")
+            self.log.info(f"No commits found for {repo}.")
 
-    def is_new_event(self, event, repo):
-        """Check if the event is new based on the timestamp."""
-        created_at = event['created_at']
+    def is_new_commit(self, commit, repo):
+        """Check if the commit is new based on the timestamp."""
+        created_at = commit['commit']['author']['date']
         last_checked = self.last_checked.get(repo)
         if last_checked and created_at <= last_checked:
-            return False  # Already fetched this event
+            return False  # Already fetched this commit
         self.last_checked[repo] = created_at
         return True
 
-    def format_event(self, event):
-        """Format a GitHub event into a readable message."""
-        event_type = event['type']
-        repo_name = event['repo']['name']
-        actor = event['actor']['login']
-        created_at = event['created_at']
-
-        # Example of colored output using IRC color codes
-        return f"\x02{actor}\x02 performed \x03,04{event_type}\x03 on \x02{repo_name}\x02 at {created_at}"
+    def format_commit(self, commit):
+        """Format a GitHub commit into a readable message."""
+        commit_message = commit['commit']['message']
+        author = commit['commit']['author']['name']
+        commit_url = commit['html_url']
+        return f"\x02{author}\x02 committed: \x03,04{commit_message}\x03 \x02{commit_url}\x02"
 
     def announce(self, message):
         """Announce the formatted message to the channel."""
@@ -141,7 +138,7 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Not subscribed to {repo}.")
 
     def fetchgitpulse(self, irc, msg, args):
-        """Manually fetch events from all subscribed repositories."""
+        """Manually fetch commits from all subscribed repositories."""
         for repo in self.subscriptions:
             self.fetch_and_announce(repo)
         irc.reply("Fetched updates for all subscribed repositories.")

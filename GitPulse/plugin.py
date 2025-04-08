@@ -34,12 +34,13 @@ import time
 from threading import Thread
 from supybot import callbacks, ircutils
 
+
 class GitPulse(callbacks.Plugin):
     """Subscribe to GitHub repositories and output activity in the channel."""
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.subscriptions = {}  # Store subscribed repositories
+        self.subscriptions = self.registryValue('subscriptions') or []  # Load subscriptions from config
         self.start_polling()
 
     def start_polling(self):
@@ -98,10 +99,12 @@ class GitPulse(callbacks.Plugin):
 
         repo = args[0]
 
+        # Check if the repo is already in the subscriptions list
         if repo in self.subscriptions:
             irc.reply(f"Already subscribed to {repo}.")
         else:
-            self.subscriptions[repo] = None  # Add repo to subscriptions list
+            self.subscriptions.append(repo)  # Add repo to subscriptions list
+            self.setRegistryValue('subscriptions', self.subscriptions)  # Save to config
             irc.reply(f"Subscribed to {repo}.")
 
     def unsubscribe(self, irc, msg, args):
@@ -116,7 +119,8 @@ class GitPulse(callbacks.Plugin):
         repo = args[0]
 
         if repo in self.subscriptions:
-            del self.subscriptions[repo]
+            self.subscriptions.remove(repo)  # Remove repo from subscriptions list
+            self.setRegistryValue('subscriptions', self.subscriptions)  # Save to config
             irc.reply(f"Unsubscribed from {repo}.")
         else:
             irc.reply(f"Not subscribed to {repo}.")
@@ -125,6 +129,7 @@ class GitPulse(callbacks.Plugin):
         """Handle cleanup when the bot shuts down."""
         super().die()
         # You can add any cleanup code here, if needed.
+
 
 Class = GitPulse
 

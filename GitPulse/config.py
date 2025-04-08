@@ -39,9 +39,9 @@ except:
 
 
 def configure(advanced):
-    # This will be called by supybot to configure this module.  advanced is
+    # This will be called by supybot to configure this module. advanced is
     # a bool that specifies whether the user identified themselves as an advanced
-    # user or not.  You should effect your configuration by manipulating the
+    # user or not. You should effect your configuration by manipulating the
     # registry as appropriate.
     from supybot.questions import expect, anything, something, yn
     conf.registerPlugin('GitPulse', True)
@@ -51,11 +51,16 @@ GitPulse = conf.registerPlugin('GitPulse')
 
 # Polling interval for GitHub API checks
 conf.registerGlobalValue(GitPulse, 'pollInterval',
-    registry.Integer(300, _("""Interval in seconds between GitHub API polls.""")))
+    registry.Integer(300, "Interval in seconds between GitHub API polls."))
 
 # GitHub personal access token for authentication (optional)
 conf.registerGlobalValue(GitPulse, 'githubToken',
-    registry.String("", _("""GitHub personal access token (optional, for increased rate limits).""")))
+    registry.String("", "GitHub personal access token (optional, for increased rate limits).", private=True))
+
+# List of subscribed GitHub repositories (using CommaSeparatedListOfStrings here)
+conf.registerGlobalValue(GitPulse, 'subscriptions',
+    registry.CommaSeparatedListOfStrings([], "List of subscribed GitHub repositories.", private=True))
+
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
 

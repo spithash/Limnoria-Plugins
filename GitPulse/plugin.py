@@ -38,8 +38,19 @@ class GitPulse(callbacks.Plugin):
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.subscriptions = []  # Store subscribed repositories (list)
-        self.load_subscriptions()  # Load the subscriptions when the plugin is initialized
+        self.subscriptions = []  # List of repositories
+        self.poll_interval = self.registryValue('pollInterval')  # Get the polling interval from the configuration
+        self.start_polling()
+
+    def start_polling(self):
+        """Start polling GitHub for events in a separate thread."""
+        def poll():
+            while True:
+                for repo in self.subscriptions:
+                    self.fetch_and_announce(repo)
+                time.sleep(self.poll_interval)
+
+        Thread(target=poll, daemon=True).start()
 
     def fetch_and_announce(self, repo):
         """Fetch GitHub events for a repository and announce them."""
@@ -49,61 +60,58 @@ class GitPulse(callbacks.Plugin):
             headers['Authorization'] = f'token {github_token}'
 
         url = f"https://api.github.com/repos/{repo}/events"
-        self.log.info(f"Fetching events for {repo}...")  # Log the repo being polled
         response = requests.get(url, headers=headers)
 
         if response.status_code == 200:
             events = response.json()
-            self.log.info(f"Received {len(events)} events from GitHub.")  # Log the number of events received
-            for event in events:
-                # Filter for push events (you can adjust based on the types of events you care about)
-                if event['type'] == 'PushEvent':  # Only push events (commits)
+            if events:
+                for event in events:
                     message = self.format_event(event)
                     self.announce(message)
+            else:
+                self.log.info(f"No new events for {repo}.")
         else:
-            self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")  # Error if fetching fails
+            self.log.info(f"Failed to fetch events for {repo}: {response.status_code}")
 
     def format_event(self, event):
-        """Format a GitHub event into a readable message."""
+        """Format a GitHub event into a readable and colorful message."""
         event_type = event['type']
         repo_name = event['repo']['name']
         actor = event['actor']['login']
         created_at = event['created_at']
+        
+        # Assign color based on event type
+        if event_type == 'PushEvent':
+            color = ircutils.mircColor('green')  # Green for commits
+        elif event_type == 'IssuesEvent':
+            color = ircutils.mircColor('yellow')  # Yellow for issues
+        else:
+            color = ircutils.mircColor('blue')  # Blue for other events
 
-        # Format the message based on event type and details
-        return f"New event from {actor} in {repo_name} ({event_type}): {created_at}"
+        return f"{color}New event: {event_type} by {actor} in {repo_name} on {created_at}"
 
     def announce(self, message):
-        """Announce the formatted message to the channel where the command was triggered."""
-        # The channel will be the one the command was invoked in
+        """Announce the formatted message to the channel."""
         channel = self.ircutils.get_channel_from_message(self.ircmsgs)
         if channel:
             self.irc.queueMsg(ircutils.privmsg(channel, message))
 
     def subscribe(self, irc, msg, args):
-        """<owner/repo>
-        Subscribe to a GitHub repository to monitor its activity.
-        """
-        self.log.info(f"Received args in subscribe: {args}")  # Debugging log
+        """Subscribe to a GitHub repository to monitor its activity."""
         if len(args) < 1:
             irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
             return
 
         repo = args[0]
 
-        if repo in self.subscriptions:
-            irc.reply(f"Already subscribed to {repo}.")
-        else:
-            self.subscriptions.append(repo)  # Add repo to subscriptions list
-            self.save_subscriptions()  # Save the subscriptions
+        if repo not in self.subscriptions:
+            self.subscriptions.append(repo)
             irc.reply(f"Subscribed to {repo}.")
-            self.log.info(f"Subscribed to {repo}.")  # Debugging log
+        else:
+            irc.reply(f"Already subscribed to {repo}.")
 
     def unsubscribe(self, irc, msg, args):
-        """<owner/repo>
-        Unsubscribe from a GitHub repository.
-        """
-        self.log.info(f"Received args in unsubscribe: {args}")  # Debugging log
+        """Unsubscribe from a GitHub repository."""
         if len(args) < 1:
             irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
             return
@@ -111,36 +119,19 @@ class GitPulse(callbacks.Plugin):
         repo = args[0]
 
         if repo in self.subscriptions:
-            self.subscriptions.remove(repo)  # Remove repo from subscriptions list
-            self.save_subscriptions()  # Save the updated subscriptions
+            self.subscriptions.remove(repo)
             irc.reply(f"Unsubscribed from {repo}.")
-            self.log.info(f"Unsubscribed from {repo}.")  # Debugging log
         else:
             irc.reply(f"Not subscribed to {repo}.")
 
-    def save_subscriptions(self):
-        """Save the current subscriptions to the configuration."""
-        self.setRegistryValue('subscriptions', self.subscriptions)
-
-    def load_subscriptions(self):
-        """Load the subscriptions from the configuration."""
-        self.subscriptions = self.registryValue('subscriptions') or []  # Default to an empty list if not set
-        self.log.info(f"Loaded {len(self.subscriptions)} subscriptions.")  # Debug log
-
     def fetchgitpulse(self, irc, msg, args):
-        """Manually fetch updates from the subscribed GitHub repositories."""
-        self.log.info(f"Manual fetch triggered by {msg.nick}.")
-        if not self.subscriptions:
-            irc.reply("No repositories subscribed to. Please subscribe to a repository first.")
-            return
-
+        """Manually fetch updates for all subscribed repositories."""
         for repo in self.subscriptions:
-            self.fetch_and_announce(repo)  # Fetch updates for each subscribed repo
-        irc.reply("Fetched updates for all subscribed repositories.")
+            irc.reply(f"Fetching updates for {repo}...")
+            self.fetch_and_announce(repo)
 
     def die(self):
         """Handle cleanup when the bot shuts down."""
-        self.save_subscriptions()  # Ensure subscriptions are saved on shutdown
         super().die()
 
 Class = GitPulse

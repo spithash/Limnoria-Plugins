@@ -38,8 +38,8 @@ class GitPulse(callbacks.Plugin):
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.subscriptions = []  # List of repositories
-        self.poll_interval = self.registryValue('pollInterval')  # Get the polling interval from the configuration
+        self.subscriptions = []  # List of repositories to track
+        self.last_checked = {}  # Track last fetch time per repo
         self.start_polling()
 
     def start_polling(self):
@@ -48,47 +48,62 @@ class GitPulse(callbacks.Plugin):
             while True:
                 for repo in self.subscriptions:
                     self.fetch_and_announce(repo)
-                time.sleep(self.poll_interval)
+                time.sleep(self.registryValue('pollInterval'))  # Default 600s
 
         Thread(target=poll, daemon=True).start()
 
     def fetch_and_announce(self, repo):
         """Fetch GitHub events for a repository and announce them."""
-        github_token = self.registryValue('githubToken')  # Get the token if available
+        github_token = self.registryValue('githubToken')
         headers = {}
         if github_token:
             headers['Authorization'] = f'token {github_token}'
 
         url = f"https://api.github.com/repos/{repo}/events"
-        response = requests.get(url, headers=headers)
+        params = {'per_page': 100}  # Adjust as necessary
+        all_events = []
 
-        if response.status_code == 200:
-            events = response.json()
-            if events:
-                for event in events:
+        # Handle paginated results
+        while url:
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                events = response.json()
+                all_events.extend(events)
+                # Get next page URL from the response headers
+                url = response.links.get('next', {}).get('url', None)
+            else:
+                self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")
+                return
+
+        if all_events:
+            new_events = [event for event in all_events if self.is_new_event(event, repo)]
+            if new_events:
+                for event in new_events:
                     message = self.format_event(event)
                     self.announce(message)
             else:
                 self.log.info(f"No new events for {repo}.")
         else:
-            self.log.info(f"Failed to fetch events for {repo}: {response.status_code}")
+            self.log.info(f"No events found for {repo}.")
+
+    def is_new_event(self, event, repo):
+        """Check if the event is new based on the timestamp."""
+        created_at = event['created_at']
+        last_checked = self.last_checked.get(repo)
+        if last_checked and created_at <= last_checked:
+            return False  # Already fetched this event
+        self.last_checked[repo] = created_at
+        return True
 
     def format_event(self, event):
-        """Format a GitHub event into a readable and colorful message."""
+        """Format a GitHub event into a readable message."""
         event_type = event['type']
         repo_name = event['repo']['name']
         actor = event['actor']['login']
         created_at = event['created_at']
-        
-        # Assign color based on event type
-        if event_type == 'PushEvent':
-            color = ircutils.mircColor('green')  # Green for commits
-        elif event_type == 'IssuesEvent':
-            color = ircutils.mircColor('yellow')  # Yellow for issues
-        else:
-            color = ircutils.mircColor('blue')  # Blue for other events
 
-        return f"{color}New event: {event_type} by {actor} in {repo_name} on {created_at}"
+        # Example of colored output using IRC color codes
+        return f"\x02{actor}\x02 performed \x03,04{event_type}\x03 on \x02{repo_name}\x02 at {created_at}"
 
     def announce(self, message):
         """Announce the formatted message to the channel."""
@@ -97,13 +112,14 @@ class GitPulse(callbacks.Plugin):
             self.irc.queueMsg(ircutils.privmsg(channel, message))
 
     def subscribe(self, irc, msg, args):
-        """Subscribe to a GitHub repository to monitor its activity."""
+        """<owner/repo>
+        Subscribe to a GitHub repository to monitor its activity.
+        """
         if len(args) < 1:
             irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
             return
 
         repo = args[0]
-
         if repo not in self.subscriptions:
             self.subscriptions.append(repo)
             irc.reply(f"Subscribed to {repo}.")
@@ -111,13 +127,13 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Already subscribed to {repo}.")
 
     def unsubscribe(self, irc, msg, args):
-        """Unsubscribe from a GitHub repository."""
+        """<owner/repo>
+        Unsubscribe from a GitHub repository."""
         if len(args) < 1:
             irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
             return
 
         repo = args[0]
-
         if repo in self.subscriptions:
             self.subscriptions.remove(repo)
             irc.reply(f"Unsubscribed from {repo}.")
@@ -125,10 +141,10 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Not subscribed to {repo}.")
 
     def fetchgitpulse(self, irc, msg, args):
-        """Manually fetch updates for all subscribed repositories."""
+        """Manually fetch events from all subscribed repositories."""
         for repo in self.subscriptions:
-            irc.reply(f"Fetching updates for {repo}...")
             self.fetch_and_announce(repo)
+        irc.reply("Fetched updates for all subscribed repositories.")
 
     def die(self):
         """Handle cleanup when the bot shuts down."""

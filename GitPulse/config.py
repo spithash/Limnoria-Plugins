@@ -51,7 +51,7 @@ GitPulse = conf.registerPlugin('GitPulse')
 
 # Polling interval for GitHub API checks
 conf.registerGlobalValue(GitPulse, 'pollInterval',
-    registry.Integer(300, "Interval in seconds between GitHub API polls."))
+    registry.Integer(600, _("Interval in seconds between GitHub API polls.")))
 
 # GitHub personal access token for authentication (optional)
 conf.registerGlobalValue(GitPulse, 'githubToken',

@@ -28,8 +28,9 @@
 
 ###
 
-import requests
 import time
+import requests
+from supybot import ircmsgs
 from threading import Thread
 from supybot import callbacks, ircutils
 
@@ -43,70 +44,77 @@ class GitPulse(callbacks.Plugin):
         self.start_polling()
 
     def start_polling(self):
-        """Start polling GitHub for commits in a separate thread."""
+        """Start polling GitHub for events in a separate thread."""
         def poll():
             while True:
                 for repo in self.subscriptions:
-                    self.fetch_and_announce(repo)
+                    self.fetch_and_announce(repo, irc, None)  # Pass irc and msg (None here)
                 time.sleep(self.registryValue('pollInterval'))  # Default 600s
 
         Thread(target=poll, daemon=True).start()
 
-    def fetch_and_announce(self, repo):
-        """Fetch GitHub commits for a repository and announce them."""
+    def fetch_and_announce(self, repo, irc, msg):
+        """Fetch GitHub events for a repository and announce them."""
         github_token = self.registryValue('githubToken')
         headers = {}
         if github_token:
             headers['Authorization'] = f'token {github_token}'
 
         url = f"https://api.github.com/repos/{repo}/commits"
-        params = {'per_page': 5}  # Fetch the latest 5 commits
-        all_commits = []
+        params = {'per_page': 100}  # Adjust as necessary
+        all_events = []
 
         # Handle paginated results
         while url:
             response = requests.get(url, headers=headers, params=params)
             if response.status_code == 200:
-                commits = response.json()
-                all_commits.extend(commits)
+                events = response.json()
+                all_events.extend(events)
                 # Get next page URL from the response headers
                 url = response.links.get('next', {}).get('url', None)
             else:
-                self.log.error(f"Failed to fetch commits for {repo}: {response.status_code}")
+                self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")
                 return
 
-        if all_commits:
-            new_commits = [commit for commit in all_commits if self.is_new_commit(commit, repo)]
-            if new_commits:
-                for commit in new_commits:
-                    message = self.format_commit(commit)
-                    self.announce(message)
+        if all_events:
+            new_events = [event for event in all_events if self.is_new_event(event, repo)]
+            if new_events:
+                for event in new_events:
+                    message = self.format_event(event)
+                    self.announce(message, irc, msg)  # Pass irc and msg here
             else:
-                self.log.info(f"No new commits for {repo}.")
+                self.log.info(f"No new events for {repo}.")
         else:
-            self.log.info(f"No commits found for {repo}.")
+            self.log.info(f"No events found for {repo}.")
 
-    def is_new_commit(self, commit, repo):
-        """Check if the commit is new based on the timestamp."""
-        created_at = commit['commit']['author']['date']
+    def is_new_event(self, event, repo):
+        """Check if the event is new based on the timestamp."""
+        created_at = event['commit']['committer']['date']
         last_checked = self.last_checked.get(repo)
         if last_checked and created_at <= last_checked:
-            return False  # Already fetched this commit
+            return False  # Already fetched this event
         self.last_checked[repo] = created_at
         return True
 
-    def format_commit(self, commit):
-        """Format a GitHub commit into a readable message."""
-        commit_message = commit['commit']['message']
-        author = commit['commit']['author']['name']
-        commit_url = commit['html_url']
-        return f"\x02{author}\x02 committed: \x03,04{commit_message}\x03 \x02{commit_url}\x02"
+    def format_event(self, event):
+        """Format a GitHub event into a readable message."""
+        commit_message = event['commit']['message']
+        author = event['commit']['author']['name']
+        repo_name = event.get('repository', {}).get('name', 'Unknown repository')
+        commit_url = event['html_url']
 
-    def announce(self, message):
+        # Ensure the message does not contain invalid characters for IRC
+        sanitized_message = commit_message.replace("\x03", "").replace("\x02", "")  # Remove IRC formatting characters
+
+        # Example of colored output using IRC color codes
+        return f"\x02{author}\x02 committed: \x03,04{sanitized_message}\x03 to \x02{repo_name}\x02: {commit_url}"
+
+
+    def announce(self, message, irc, msg):
         """Announce the formatted message to the channel."""
-        channel = self.ircutils.get_channel_from_message(self.ircmsgs)
+        channel = msg.args[0]  # This assumes the message has the channel information in args[0]
         if channel:
-            self.irc.queueMsg(ircutils.privmsg(channel, message))
+            irc.sendMsg(ircmsgs.privmsg(channel, message))  # This sends the message to the channel
 
     def subscribe(self, irc, msg, args):
         """<owner/repo>
@@ -138,9 +146,9 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Not subscribed to {repo}.")
 
     def fetchgitpulse(self, irc, msg, args):
-        """Manually fetch commits from all subscribed repositories."""
+        """Manually fetch events from all subscribed repositories."""
         for repo in self.subscriptions:
-            self.fetch_and_announce(repo)
+            self.fetch_and_announce(repo, irc, msg)  # Pass irc and msg here
         irc.reply("Fetched updates for all subscribed repositories.")
 
     def die(self):

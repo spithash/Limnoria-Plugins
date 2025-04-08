@@ -40,7 +40,7 @@ except:
 
 def configure(advanced):
     # This will be called by supybot to configure this module.  advanced is
-    # a bool that specifies whether the user identified themself as an advanced
+    # a bool that specifies whether the user identified themselves as an advanced
     # user or not.  You should effect your configuration by manipulating the
     # registry as appropriate.
     from supybot.questions import expect, anything, something, yn
@@ -48,9 +48,14 @@ def configure(advanced):
 
 
 GitPulse = conf.registerPlugin('GitPulse')
-# This is where your configuration variables (if any) should go.  For example:
-# conf.registerGlobalValue(GitPulse, 'someConfigVariableName',
-#     registry.Boolean(False, _("""Help for someConfigVariableName.""")))
 
+# Polling interval for GitHub API checks
+conf.registerGlobalValue(GitPulse, 'pollInterval',
+    registry.Integer(300, _("""Interval in seconds between GitHub API polls.""")))
+
+# GitHub personal access token for authentication (optional)
+conf.registerGlobalValue(GitPulse, 'githubToken',
+    registry.String("", _("""GitHub personal access token (optional, for increased rate limits).""")))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
+

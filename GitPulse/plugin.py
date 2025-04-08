@@ -28,20 +28,103 @@
 
 ###
 
-from supybot import utils, plugins, ircutils, callbacks
-from supybot.commands import *
-from supybot.i18n import PluginInternationalization
-
-
-_ = PluginInternationalization('GitPulse')
-
+import requests
+import json
+import time
+from threading import Thread
+from supybot import callbacks, ircutils
 
 class GitPulse(callbacks.Plugin):
-    """Subscribe to Github repos and output activity in the channel."""
-    pass
+    """Subscribe to GitHub repositories and output activity in the channel."""
 
+    def __init__(self, irc):
+        super().__init__(irc)
+        self.subscriptions = {}  # Store subscribed repositories
+        self.start_polling()
+
+    def start_polling(self):
+        """Start polling GitHub for events in a separate thread."""
+        def poll():
+            while True:
+                for repo in self.subscriptions:
+                    self.fetch_and_announce(repo)
+                time.sleep(self.registryValue('pollInterval'))  # Use polling interval from config
+
+        Thread(target=poll, daemon=True).start()
+
+    def fetch_and_announce(self, repo):
+        """Fetch GitHub events for a repository and announce them."""
+        github_token = self.registryValue('githubToken')  # Get the token if available
+        headers = {}
+        if github_token:
+            headers['Authorization'] = f'token {github_token}'
+
+        url = f"https://api.github.com/repos/{repo}/events"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            events = response.json()
+            for event in events:
+                message = self.format_event(event)
+                self.announce(message)
+        else:
+            self.log.info(f"Failed to fetch events for {repo}: {response.status_code}")
+
+    def format_event(self, event):
+        """Format a GitHub event into a readable message."""
+        event_type = event['type']
+        repo_name = event['repo']['name']
+        actor = event['actor']['login']
+        created_at = event['created_at']
+
+        # You can format this as per your needs. Here's an example format:
+        return f"New event from {actor} in {repo_name} ({event_type}): {created_at}"
+
+    def announce(self, message):
+        """Announce the formatted message to the channel where the command was triggered."""
+        # The channel will be the one the command was invoked in
+        channel = self.ircutils.get_channel_from_message(self.ircmsgs)
+        if channel:
+            self.irc.queueMsg(ircutils.privmsg(channel, message))
+
+    def subscribe(self, irc, msg, args):
+        """<owner/repo>
+        Subscribe to a GitHub repository to monitor its activity.
+        """
+        self.log.info(f"Received args in subscribe: {args}")  # Debugging log
+        if len(args) < 1:
+            irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
+            return
+
+        repo = args[0]
+
+        if repo in self.subscriptions:
+            irc.reply(f"Already subscribed to {repo}.")
+        else:
+            self.subscriptions[repo] = None  # Add repo to subscriptions list
+            irc.reply(f"Subscribed to {repo}.")
+
+    def unsubscribe(self, irc, msg, args):
+        """<owner/repo>
+        Unsubscribe from a GitHub repository.
+        """
+        self.log.info(f"Received args in unsubscribe: {args}")  # Debugging log
+        if len(args) < 1:
+            irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
+            return
+
+        repo = args[0]
+
+        if repo in self.subscriptions:
+            del self.subscriptions[repo]
+            irc.reply(f"Unsubscribed from {repo}.")
+        else:
+            irc.reply(f"Not subscribed to {repo}.")
+
+    def die(self):
+        """Handle cleanup when the bot shuts down."""
+        super().die()
+        # You can add any cleanup code here, if needed.
 
 Class = GitPulse
 
-
-# vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:

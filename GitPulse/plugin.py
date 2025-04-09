@@ -54,11 +54,11 @@ class GitPulse(callbacks.Plugin):
             self.polling_thread.start()
 
     def stop_polling(self):
-        """Stop the polling process when the plugin is unloaded."""
+        """Stop the polling process immediately when the plugin is unloaded."""
+        self.stop_polling_event.set()  # Trigger the stop event
         if self.polling_thread:
-            self.stop_polling_event.set()  # Trigger the stop event
             self.polling_thread.join()  # Ensure that the thread stops gracefully
-            self.log.info("Polling thread stopped.")
+        self.log.info("Polling thread stopped.")
 
     def poll(self):
         """Polls GitHub for events based on the repositories in the configuration."""
@@ -77,7 +77,7 @@ class GitPulse(callbacks.Plugin):
 
             # Wait for the configured poll interval before checking again
             self.log.info(f"Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
-            time.sleep(self.registryValue('pollInterval'))
+            self.stop_polling_event.wait(self.registryValue('pollInterval'))  # Use wait to respect the stop event
 
     def fetch_and_announce(self, repo, irc, msg, channel):
         """Fetch events from GitHub and announce them in the channel."""

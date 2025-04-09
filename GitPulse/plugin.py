@@ -41,25 +41,26 @@ class GitPulse(callbacks.Plugin):
         super().__init__(irc)
         self.subscriptions = []
         self.last_checked = {}
-        self.irc = irc  # Store irc instance
-        self.start_polling()
+        self.polling_started = False  # Flag to avoid multiple threads
+
+    def activate(self):
+        super().activate()
+        if not self.polling_started:
+            self.polling_started = True
+            self.start_polling()
 
     def start_polling(self):
-        """Start polling GitHub for events in a separate thread."""
         def poll():
             while True:
                 for repo in self.subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None)  # Use stored irc
-                time.sleep(self.registryValue('pollInterval'))  # Defaults to 600s
+                    self.fetch_and_announce(repo, self.irc, None)
+                time.sleep(self.registryValue('pollInterval'))  # default: 600
 
         Thread(target=poll, daemon=True).start()
 
     def fetch_and_announce(self, repo, irc, msg):
-        """Fetch GitHub events for a repository and announce them."""
         github_token = self.registryValue('githubToken')
-        headers = {}
-        if github_token:
-            headers['Authorization'] = f'token {github_token}'
+        headers = {'Authorization': f'token {github_token}'} if github_token else {}
 
         url = f"https://api.github.com/repos/{repo}/commits"
         params = {'per_page': 100}
@@ -81,11 +82,8 @@ class GitPulse(callbacks.Plugin):
                 for event in reversed(new_events):
                     message = self.format_event(event, repo)
                     self.announce(message, irc, msg)
-        else:
-            self.log.info(f"No events found for {repo}.")
 
     def is_new_event(self, event, repo):
-        """Check if the event is new based on the timestamp."""
         created_at = event['commit']['committer']['date']
         last_checked = self.last_checked.get(repo)
         if last_checked and created_at <= last_checked:
@@ -94,7 +92,6 @@ class GitPulse(callbacks.Plugin):
         return True
 
     def format_event(self, event, repo):
-        """Format a GitHub event into a readable message with IRC colors."""
         commit_message = event['commit']['message'].split('\n')[0]
         author = event['commit']['author']['name']
         commit_url = event['html_url']
@@ -113,18 +110,15 @@ class GitPulse(callbacks.Plugin):
         )
 
     def announce(self, message, irc, msg):
-        """Announce the formatted message to the channel."""
         if msg is not None:
             channel = msg.args[0]
             if channel:
                 irc.sendMsg(ircmsgs.privmsg(channel, message))
 
     def subscribe(self, irc, msg, args):
-        """<owner/repo>
-        Subscribe to a GitHub repository to monitor its activity.
-        """
+        """<owner/repo> -- Subscribe to a GitHub repository."""
         if len(args) < 1:
-            irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
+            irc.reply("Usage: subscribe owner/repo")
             return
 
         repo = args[0]
@@ -135,10 +129,9 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Already subscribed to {repo}.")
 
     def unsubscribe(self, irc, msg, args):
-        """<owner/repo>
-        Unsubscribe from a GitHub repository."""
+        """<owner/repo> -- Unsubscribe from a GitHub repository."""
         if len(args) < 1:
-            irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
+            irc.reply("Usage: unsubscribe owner/repo")
             return
 
         repo = args[0]
@@ -154,7 +147,6 @@ class GitPulse(callbacks.Plugin):
             self.fetch_and_announce(repo, irc, msg)
 
     def die(self):
-        """Cleanup on plugin shutdown."""
         super().die()
 
 

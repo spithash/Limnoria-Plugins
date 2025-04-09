@@ -54,6 +54,7 @@ class GitPulse(callbacks.Plugin):
     def poll(self):
         """Polls GitHub for events based on the repositories in the configuration."""
         while True:
+            self.log.info("Polling for events...")
             for channel in self.irc.state.channels:
                 subscriptions = self.registryValue('subscriptions', channel)
                 if isinstance(subscriptions, str):
@@ -64,6 +65,7 @@ class GitPulse(callbacks.Plugin):
                     self.fetch_and_announce(repo, self.irc, None, channel)
 
             # Wait for the configured poll interval before checking again
+            self.log.info(f"Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
             time.sleep(self.registryValue('pollInterval'))
 
     def fetch_and_announce(self, repo, irc, msg, channel):
@@ -81,50 +83,39 @@ class GitPulse(callbacks.Plugin):
         seen_ids = self.load_global_seen_ids()
         new_ids = []
 
-        for event in reversed(events):
+        for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']
             if event_id in seen_ids:
-                continue
-            msg_text = self.format_event(event, repo)
-            if msg_text:
-                self.announce(msg_text, irc, msg, channel)
+                continue  # Skip events that have already been posted
+
+            # Only process PushEvents (commits)
+            if event['type'] == 'PushEvent':
+                msg_text = self.format_push_event(event, repo)
+                if msg_text:
+                    self.announce(msg_text, irc, msg, channel)
+            
             new_ids.append(event_id)
 
         if new_ids:
             self.save_global_seen_ids(new_ids)
 
-    def format_event(self, event, repo):
-        """Formats the event into a human-readable string."""
-        etype = event['type']
+    def format_push_event(self, event, repo):
+        """Formats the PushEvent into a human-readable string."""
         actor = event['actor']['login']
+        commits = event['payload'].get('commits', [])
         B = '\x02'
         C = '\x03'
         RESET = '\x0f'
-        RED, GREEN, CYAN, BLUE = '05', '03', '10', '12'
+        GREEN = '03'
+        BLUE = '12'
 
-        if etype == 'PushEvent':
-            commits = event['payload'].get('commits', [])
+        if commits:
             msgs = []
             for c in commits:
-                msg = c['message'].split('\n')[0]
+                msg = c['message'].split('\n')[0]  # Only the first line of the commit message
                 url = f"https://github.com/{repo}/commit/{c['sha']}"
                 msgs.append(f"{B}{actor}{B} pushed: {C}{GREEN}{msg}{RESET} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
             return '\n'.join(msgs)
-
-        elif etype == 'IssuesEvent':
-            action = event['payload']['action']
-            issue = event['payload']['issue']
-            title = issue['title']
-            url = issue['html_url']
-            return f"{B}{actor}{B} {action} issue: {C}{CYAN}{title}{RESET} in {B}{repo}{B}: {C}{BLUE}{url}{RESET}"
-
-        elif etype == 'PullRequestEvent':
-            action = event['payload']['action']
-            pr = event['payload']['pull_request']
-            title = pr['title']
-            url = pr['html_url']
-            return f"{B}{actor}{B} {action} PR: {C}{CYAN}{title}{RESET} in {B}{repo}{B}: {C}{BLUE}{url}{RESET}"
-
         return None
 
     def announce(self, message, irc, msg, channel):

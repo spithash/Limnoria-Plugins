@@ -33,7 +33,6 @@ import requests
 from threading import Thread, Event
 from supybot import callbacks, ircmsgs
 
-
 class GitPulse(callbacks.Plugin):
     """GitHub activity monitor using Events API."""
 
@@ -64,6 +63,8 @@ class GitPulse(callbacks.Plugin):
         """Polls GitHub for events based on the repositories in the configuration."""
         while not self.stop_polling_event.is_set():
             self.log.info("Polling for events...")
+
+            # Fetch subscribed repositories for all channels
             for channel in self.irc.state.channels:
                 subscriptions = self.registryValue('subscriptions', channel)
                 if isinstance(subscriptions, str):

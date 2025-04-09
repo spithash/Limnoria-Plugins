@@ -39,9 +39,9 @@ class GitPulse(callbacks.Plugin):
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.subscriptions = []  # List of repositories to track
-        self.last_checked = {}  # Track last fetch time per repo
-        self.irc = irc  # Store irc instance for polling thread
+        self.subscriptions = []
+        self.last_checked = {}
+        self.irc = irc  # Store irc instance
         self.start_polling()
 
     def start_polling(self):
@@ -49,8 +49,8 @@ class GitPulse(callbacks.Plugin):
         def poll():
             while True:
                 for repo in self.subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None)
-                time.sleep(self.registryValue('pollInterval'))  # Default 600s
+                    self.fetch_and_announce(repo, self.irc, None)  # Use stored irc
+                time.sleep(self.registryValue('pollInterval'))  # Defaults to 600s
 
         Thread(target=poll, daemon=True).start()
 
@@ -78,11 +78,9 @@ class GitPulse(callbacks.Plugin):
         if all_events:
             new_events = [event for event in all_events if self.is_new_event(event, repo)]
             if new_events:
-                for event in reversed(new_events):  # Announce oldest to newest
+                for event in reversed(new_events):
                     message = self.format_event(event, repo)
                     self.announce(message, irc, msg)
-            else:
-                self.log.info(f"No new events for {repo}.")
         else:
             self.log.info(f"No events found for {repo}.")
 
@@ -101,7 +99,6 @@ class GitPulse(callbacks.Plugin):
         author = event['commit']['author']['name']
         commit_url = event['html_url']
 
-        # IRC Formatting
         BOLD = '\x02'
         COLOR = '\x03'
         RESET = '\x0f'
@@ -139,8 +136,7 @@ class GitPulse(callbacks.Plugin):
 
     def unsubscribe(self, irc, msg, args):
         """<owner/repo>
-        Unsubscribe from a GitHub repository.
-        """
+        Unsubscribe from a GitHub repository."""
         if len(args) < 1:
             irc.reply("Please provide the GitHub repository in the format 'owner/repo'.")
             return

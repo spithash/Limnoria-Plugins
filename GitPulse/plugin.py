@@ -40,10 +40,37 @@ class GitPulse(callbacks.Plugin):
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.subscriptions = []
-        self.cache_dir = "/tmp/gitpulse_cache"
-        self.polling_started = False
+        self.cache_dir = self.get_cache_dir()
         os.makedirs(self.cache_dir, exist_ok=True)
+        self.polling_started = False
+        self.start_polling()
+
+    def get_cache_dir(self):
+        """Find the Limnoria bot root folder and construct the cache directory path."""
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        limnoria_root = os.path.dirname(os.path.dirname(plugin_dir))
+        return os.path.join(limnoria_root, 'tmp', 'gitpulse_cache')
+
+    def get_subscriptions_file(self, channel):
+        """Get the path to the file where subscriptions for a channel are stored."""
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        limnoria_root = os.path.dirname(os.path.dirname(plugin_dir))
+        channel_name = ircutils.toLower(channel)
+        return os.path.join(limnoria_root, 'tmp', f'gitpulse_subscriptions_{channel_name}.json')
+
+    def load_subscriptions(self, channel):
+        """Load the list of repositories for a specific channel from the persistent file."""
+        subscriptions_file = self.get_subscriptions_file(channel)
+        if os.path.exists(subscriptions_file):
+            with open(subscriptions_file, "r") as f:
+                return json.load(f)
+        return []
+
+    def save_subscriptions(self, channel, subscriptions):
+        """Save the list of repositories for a specific channel to the persistent file."""
+        subscriptions_file = self.get_subscriptions_file(channel)
+        with open(subscriptions_file, "w") as f:
+            json.dump(subscriptions, f)
 
     def activate(self):
         super().activate()
@@ -54,8 +81,11 @@ class GitPulse(callbacks.Plugin):
     def start_polling(self):
         def poll():
             while True:
-                for repo in self.subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None)
+                # Poll each channel individually
+                for channel in self.irc.state.channels:
+                    subscriptions = self.load_subscriptions(channel)
+                    for repo in subscriptions:
+                        self.fetch_and_announce(repo, self.irc, channel)
                 time.sleep(self.registryValue('pollInterval'))
         Thread(target=poll, daemon=True).start()
 
@@ -72,12 +102,11 @@ class GitPulse(callbacks.Plugin):
 
     def _save_seen_ids(self, repo, ids):
         path = self._get_cache_file(repo)
-        # Keep only the latest 20 events
         trimmed = ids[-20:]
         with open(path, "w") as f:
             json.dump(trimmed, f)
 
-    def fetch_and_announce(self, repo, irc, msg):
+    def fetch_and_announce(self, repo, irc, channel):
         token = self.registryValue('githubToken')
         headers = {'Authorization': f'token {token}'} if token else {}
         url = f"https://api.github.com/repos/{repo}/events"
@@ -96,7 +125,7 @@ class GitPulse(callbacks.Plugin):
                 continue
             msg_text = self.format_event(event, repo)
             if msg_text:
-                self.announce(msg_text, irc, msg)
+                self.announce(msg_text, irc, channel)
             new_ids.append(event_id)
 
         if new_ids:
@@ -136,11 +165,7 @@ class GitPulse(callbacks.Plugin):
 
         return None
 
-    def announce(self, message, irc, msg):
-        channel = msg.args[0] if msg else self.registryValue('defaultChannel')
-        if not channel:
-            self.log.warning("No channel specified for announcement.")
-            return
+    def announce(self, message, irc, channel):
         for line in message.split('\n'):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
 
@@ -150,8 +175,11 @@ class GitPulse(callbacks.Plugin):
             irc.reply("Usage: subscribe owner/repo")
             return
         repo = args[0]
-        if repo not in self.subscriptions:
-            self.subscriptions.append(repo)
+        channel = msg.args[0]
+        subscriptions = self.load_subscriptions(channel)
+        if repo not in subscriptions:
+            subscriptions.append(repo)
+            self.save_subscriptions(channel, subscriptions)
             irc.reply(f"Subscribed to {repo}.")
         else:
             irc.reply(f"Already subscribed to {repo}.")
@@ -162,20 +190,33 @@ class GitPulse(callbacks.Plugin):
             irc.reply("Usage: unsubscribe owner/repo")
             return
         repo = args[0]
-        if repo in self.subscriptions:
-            self.subscriptions.remove(repo)
+        channel = msg.args[0]
+        subscriptions = self.load_subscriptions(channel)
+        if repo in subscriptions:
+            subscriptions.remove(repo)
+            self.save_subscriptions(channel, subscriptions)
             irc.reply(f"Unsubscribed from {repo}.")
         else:
             irc.reply(f"Not subscribed to {repo}.")
 
+    def listgitpulse(self, irc, msg, args):
+        """List the GitHub repositories you're subscribed to in this channel."""
+        channel = msg.args[0]
+        subscriptions = self.load_subscriptions(channel)
+        if subscriptions:
+            irc.reply(f"Subscribed repositories in this channel: {', '.join(subscriptions)}")
+        else:
+            irc.reply(f"You are not subscribed to any repositories in this channel.")
+
     def fetchgitpulse(self, irc, msg, args):
-        """Manually fetch events from all subscribed repositories."""
-        for repo in self.subscriptions:
-            self.fetch_and_announce(repo, irc, msg)
+        """Manually fetch events from all subscribed repositories in this channel."""
+        channel = msg.args[0]
+        subscriptions = self.load_subscriptions(channel)
+        for repo in subscriptions:
+            self.fetch_and_announce(repo, irc, channel)
 
     def die(self):
         super().die()
-
 
 Class = GitPulse
 

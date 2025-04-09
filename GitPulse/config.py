@@ -34,7 +34,6 @@ try:
     _ = PluginInternationalization('GitPulse')
 except:
     # Placeholder that allows to run the plugin on a bot
-    # without the i18n module
     _ = lambda x: x
 
 
@@ -51,16 +50,15 @@ GitPulse = conf.registerPlugin('GitPulse')
 
 # Polling interval for GitHub API checks
 conf.registerGlobalValue(GitPulse, 'pollInterval',
-    registry.Integer(600, _("Interval in seconds between GitHub API polls.")))
+    registry.Integer(60, _("Interval in seconds between GitHub API polls.")))
 
 # GitHub personal access token for authentication (optional)
 conf.registerGlobalValue(GitPulse, 'githubToken',
     registry.String("", "GitHub personal access token (optional, for increased rate limits).", private=True))
 
-# List of subscribed GitHub repositories (using CommaSeparatedListOfStrings here)
-conf.registerGlobalValue(GitPulse, 'subscriptions',
-    registry.CommaSeparatedListOfStrings([], "List of subscribed GitHub repositories.", private=True))
-
+# List of subscribed GitHub repositories per channel using CommaSeparatedListOfStrings
+conf.registerChannelValue(GitPulse, 'subscriptions',
+    registry.CommaSeparatedListOfStrings([], "List of subscribed GitHub repositories per channel.", private=True))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
 

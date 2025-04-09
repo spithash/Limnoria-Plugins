@@ -29,56 +29,56 @@
 ###
 
 import time
-import json
-import os
 import requests
-from threading import Thread
-from supybot import callbacks, ircmsgs, ircutils
+from threading import Thread, Event
+from supybot import callbacks, ircmsgs
+
 
 class GitPulse(callbacks.Plugin):
-    """GitHub activity monitor using Events API.
-
-    When you subscribe to a repository using the subscribe command, the bot will immediately
-    fetch and post the latest event. Thereafter, it polls GitHub every pollInterval seconds,
-    and if new events (e.g. commits) are found, they are announced in the channel.
-    The global event history (up to 50 event IDs) is stored in the configuration to avoid reposts.
-    """
+    """GitHub activity monitor using Events API."""
 
     def __init__(self, irc):
         super().__init__(irc)
-        self.irc = irc                           # store the IRC connection
-        self.polling_active = True               # flag to control polling
-        self.start_polling()                     # start the background polling thread
+        self.irc = irc
+        self.polling_started = False
+        self.polling_thread = None
+        self.stop_polling_event = Event()  # Used to stop polling when the plugin is unloaded
+        self.start_polling()
 
-    def get_cache_dir(self):
-        """Determine the bot's tmp directory for caching event IDs."""
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        limnoria_root = os.path.dirname(os.path.dirname(plugin_dir))
-        cache_dir = os.path.join(limnoria_root, 'tmp', 'gitpulse_cache')
-        return cache_dir
+    def start_polling(self):
+        """Start the polling process when the plugin is initialized."""
+        if not self.polling_started:
+            self.polling_started = True
+            self.log.info("Starting polling thread for GitHub events.")
+            self.polling_thread = Thread(target=self.poll, daemon=True)
+            self.polling_thread.start()
 
-    def _get_cache_file(self, repo):
-        """Get a sanitized path for caching events for a repo."""
-        sanitized = repo.replace('/', '_')
-        return os.path.join(self.get_cache_dir(), f"{sanitized}.json")
+    def stop_polling(self):
+        """Stop the polling process when the plugin is unloaded."""
+        if self.polling_thread:
+            self.stop_polling_event.set()  # Trigger the stop event
+            self.polling_thread.join()  # Ensure that the thread stops gracefully
+            self.log.info("Polling thread stopped.")
 
-    def _load_seen_ids(self, repo):
-        """Load the event IDs that have already been seen for this repository."""
-        path = self._get_cache_file(repo)
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                return json.load(f)
-        return []
+    def poll(self):
+        """Polls GitHub for events based on the repositories in the configuration."""
+        while not self.stop_polling_event.is_set():
+            self.log.info("Polling for events...")
+            for channel in self.irc.state.channels:
+                subscriptions = self.registryValue('subscriptions', channel)
+                if isinstance(subscriptions, str):
+                    subscriptions = subscriptions.split()
 
-    def _save_seen_ids(self, repo, ids):
-        """Save the event IDs that have been seen for this repository."""
-        path = self._get_cache_file(repo)
-        trimmed = ids[-50:]  # keep only the last 50 for safety
-        with open(path, "w") as f:
-            json.dump(trimmed, f)
+                # Poll each subscribed repository
+                for repo in subscriptions:
+                    self.fetch_and_announce(repo, self.irc, None, channel)
+
+            # Wait for the configured poll interval before checking again
+            self.log.info(f"Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
+            time.sleep(self.registryValue('pollInterval'))
 
     def fetch_and_announce(self, repo, irc, msg, channel):
-        """Fetch events from GitHub for a repository and announce new events."""
+        """Fetch events from GitHub and announce them in the channel."""
         token = self.registryValue('githubToken')
         headers = {'Authorization': f'token {token}'} if token else {}
         url = f"https://api.github.com/repos/{repo}/events"
@@ -91,24 +91,25 @@ class GitPulse(callbacks.Plugin):
         events = resp.json()
         seen_ids = self.load_global_seen_ids()
         new_ids = []
-        for event in reversed(events):
+
+        for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']
             if event_id in seen_ids:
-                continue
-            # We only process PushEvent events (commits)
+                continue  # Skip events that have already been posted
+
+            # Only process PushEvents (commits)
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
                     self.announce(msg_text, irc, msg, channel)
-            new_ids.append(event_id)
+                    # After posting, add the event ID to history
+                    new_ids.append(event_id)
 
         if new_ids:
-            updated = seen_ids + new_ids
-            self._save_seen_ids(repo, updated)
             self.save_global_seen_ids(new_ids)
 
     def format_push_event(self, event, repo):
-        """Format PushEvent data into a human-readable message."""
+        """Formats the PushEvent into a human-readable string."""
         actor = event['actor']['login']
         commits = event['payload'].get('commits', [])
         B = '\x02'
@@ -120,14 +121,14 @@ class GitPulse(callbacks.Plugin):
         if commits:
             msgs = []
             for c in commits:
-                message_line = c['message'].split('\n')[0]
+                msg = c['message'].split('\n')[0]  # Only the first line of the commit message
                 url = f"https://github.com/{repo}/commit/{c['sha']}"
-                msgs.append(f"{B}{actor}{B} pushed: {C}{GREEN}{message_line}{RESET} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
+                msgs.append(f"{B}{actor}{B} pushed: {C}{GREEN}{msg}{RESET} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
             return '\n'.join(msgs)
         return None
 
     def announce(self, message, irc, msg, channel):
-        """Announce a message in a specific channel."""
+        """Announce the formatted message in the channel."""
         if not channel:
             self.log.warning("No channel specified for announcement.")
             return
@@ -135,39 +136,45 @@ class GitPulse(callbacks.Plugin):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
 
     def subscribe(self, irc, msg, args):
-        """<owner/repo> -- Subscribe to a GitHub repository and immediately fetch its latest event."""
+        """Subscribe to a GitHub repository and immediately show the latest event."""
         if not args:
             irc.reply("Usage: subscribe owner/repo")
             return
+
         repo = args[0]
         channel = msg.args[0]
 
-        # Load current subscriptions (stored as a space-separated string)
+        # Fetch current subscriptions and ensure it's a list
         subscriptions = self.registryValue('subscriptions', channel)
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
 
+        # If repo isn't already in the list, append it
         if repo not in subscriptions:
             subscriptions.append(repo)
             self.save_subscriptions(channel, subscriptions)
             irc.reply(f"Subscribed to {repo} in channel {channel}.")
-            # Immediately fetch and announce the latest event for the new repo
+
+            # Fetch the latest event for this newly subscribed repo and show it immediately
             self.fetch_and_announce(repo, irc, msg, channel)
         else:
             irc.reply(f"Already subscribed to {repo} in channel {channel}.")
 
     def unsubscribe(self, irc, msg, args):
-        """<owner/repo> -- Unsubscribe from a GitHub repository."""
+        """Unsubscribe from a GitHub repository."""
         if not args:
             irc.reply("Usage: unsubscribe owner/repo")
             return
+
         repo = args[0]
         channel = msg.args[0]
 
+        # Fetch current subscriptions and ensure it's a list
         subscriptions = self.registryValue('subscriptions', channel)
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
 
+        # Remove the repository if it exists in the list
         if repo in subscriptions:
             subscriptions.remove(repo)
             self.save_subscriptions(channel, subscriptions)
@@ -176,52 +183,42 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"Not subscribed to {repo} in channel {channel}.")
 
     def save_subscriptions(self, channel, subscriptions):
-        """Save the subscriptions (space-separated) for a channel into the configuration."""
+        """Save subscriptions for the channel in the configuration."""
         self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
 
     def load_global_seen_ids(self):
-        """Load the global history of event IDs from configuration."""
+        """Load the global seen event IDs."""
         history = self.registryValue('history')
         return history.split() if history else []
 
     def save_global_seen_ids(self, event_ids):
-        """Save global event history to configuration (maximum 50 events)."""
+        """Save global event history."""
         history = self.load_global_seen_ids()
         history.extend(event_ids)
+        # Ensure the history length doesn't exceed 50 event IDs
         history = history[-50:]
         self.setRegistryValue('history', ' '.join(history))
 
+    def die(self):
+        """This method is called when the plugin is unloaded."""
+        self.stop_polling()  # Stop the polling thread when the plugin is unloaded
+        super().die()
+
     def listgitpulse(self, irc, msg, args):
-        """List the GitHub repositories you're subscribed to in this channel."""
+        """Lists all repositories currently subscribed to in the channel."""
         channel = msg.args[0]
+        
+        # Fetch current subscriptions
         subscriptions = self.registryValue('subscriptions', channel)
+        
+        if isinstance(subscriptions, str):
+            subscriptions = subscriptions.split()
+
         if subscriptions:
-            irc.reply(f"Subscribed repositories in {channel}: {subscriptions}")
+            irc.reply(f"Subscribed to the following repositories in {channel}: {', '.join(subscriptions)}")
         else:
             irc.reply(f"No repositories subscribed to in {channel}.")
-
-    def poll(self):
-        """Poll GitHub for events and announce them."""
-        while self.polling_active:
-            self.log.info("Polling for events...")
-            for channel in self.irc.state.channels:
-                subscriptions = self.registryValue('subscriptions', channel)
-                if isinstance(subscriptions, str):
-                    subscriptions = subscriptions.split()
-                for repo in subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None, channel)
-            self.log.info(f"Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
-            time.sleep(self.registryValue('pollInterval'))
-
-    def start_polling(self):
-        """Start the polling thread."""
-        self.polling_active = True
-        Thread(target=self.poll, daemon=True).start()
-
-    def die(self):
-        """Stop polling when the plugin is unloaded."""
-        self.polling_active = False
-        super().die()
+            
 
 Class = GitPulse
 

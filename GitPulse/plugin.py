@@ -102,11 +102,13 @@ class GitPulse(callbacks.Plugin):
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
+                    # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
-                    # After posting, add the event ID to history
+                    # After posting the event, save the event ID
                     new_ids.append(event_id)
 
         if new_ids:
+            # Save event IDs after posting the events
             self.save_global_seen_ids(new_ids)
 
     def format_push_event(self, event, repo):

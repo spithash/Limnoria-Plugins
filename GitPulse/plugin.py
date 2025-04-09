@@ -81,6 +81,7 @@ class GitPulse(callbacks.Plugin):
 
     def fetch_and_announce(self, repo, irc, msg, channel):
         """Fetch events from GitHub and announce them in the channel."""
+        self.log.debug(f"Fetching events for repository: {repo}")
         token = self.registryValue('githubToken')
         headers = {'Authorization': f'token {token}'} if token else {}
         url = f"https://api.github.com/repos/{repo}/events"
@@ -91,26 +92,38 @@ class GitPulse(callbacks.Plugin):
             return
 
         events = resp.json()
+        self.log.debug(f"Fetched {len(events)} events for {repo}")
+
         seen_ids = self.load_global_seen_ids()
         new_ids = []
 
         for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']
+            self.log.debug(f"Checking event ID {event_id}")
+
             if event_id in seen_ids:
+                self.log.debug(f"Skipping event {event_id} (already seen)")
                 continue  # Skip events that have already been posted
 
             # Only process PushEvents (commits)
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
+                    self.log.info(f"Posting new event for {repo}: {msg_text}")
                     # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
                     # After posting the event, save the event ID
                     new_ids.append(event_id)
+                else:
+                    self.log.debug(f"No commit message found for event {event_id}")
+            else:
+                self.log.debug(f"Skipping non-PushEvent for {repo}: {event['type']}")
 
         if new_ids:
             # Save event IDs after posting the events
             self.save_global_seen_ids(new_ids)
+        else:
+            self.log.debug(f"No new events to post for {repo}")
 
     def format_push_event(self, event, repo):
         """Formats the PushEvent into a human-readable string."""
@@ -138,6 +151,7 @@ class GitPulse(callbacks.Plugin):
             return
         for line in message.split('\n'):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
+            self.log.info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
         """Subscribe to a GitHub repository and immediately show the latest event."""

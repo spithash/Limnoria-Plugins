@@ -56,9 +56,12 @@ conf.registerGlobalValue(GitPulse, 'pollInterval',
 conf.registerGlobalValue(GitPulse, 'githubToken',
     registry.String("", "GitHub personal access token (optional, for increased rate limits).", private=True))
 
-# List of subscribed GitHub repositories per channel using CommaSeparatedListOfStrings
+# List of subscribed GitHub repositories per channel (space-separated)
 conf.registerChannelValue(GitPulse, 'subscriptions',
-    registry.CommaSeparatedListOfStrings([], "List of subscribed GitHub repositories per channel.", private=True))
+    registry.String("", "List of subscribed GitHub repositories per channel (space-separated).", private=True))
 
-# vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
+# Global event history across all channels/repos
+conf.registerGlobalValue(GitPulse, 'history', 
+    registry.String('', "Global history of event IDs (private).", private=True))
+
 

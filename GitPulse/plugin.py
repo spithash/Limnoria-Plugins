@@ -41,7 +41,7 @@ class GitPulse(callbacks.Plugin):
         super().__init__(irc)
         self.subscriptions = []
         self.last_checked = {}
-        self.polling_started = False  # Flag to avoid multiple threads
+        self.polling_started = False
 
     def activate(self):
         super().activate()
@@ -53,74 +53,89 @@ class GitPulse(callbacks.Plugin):
         def poll():
             while True:
                 for repo in self.subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None)
+                    self.fetch_and_announce(repo, self.irc, None, manual=False)
                 time.sleep(self.registryValue('pollInterval'))  # default: 600
-
         Thread(target=poll, daemon=True).start()
 
-    def fetch_and_announce(self, repo, irc, msg):
+    def fetch_and_announce(self, repo, irc, msg, manual=False):
         github_token = self.registryValue('githubToken')
         headers = {'Authorization': f'token {github_token}'} if github_token else {}
 
-        url = f"https://api.github.com/repos/{repo}/commits"
-        params = {'per_page': 100}
-        all_events = []
+        url = f"https://api.github.com/repos/{repo}/events"
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")
+            return
 
-        while url:
-            response = requests.get(url, headers=headers, params=params)
-            if response.status_code == 200:
-                events = response.json()
-                all_events.extend(events)
-                url = response.links.get('next', {}).get('url', None)
-            else:
-                self.log.error(f"Failed to fetch events for {repo}: {response.status_code}")
-                return
+        events = response.json()
+        last_time = self.last_checked.get(repo)
+        new_events = []
 
-        if all_events:
-            new_events = [event for event in all_events if self.is_new_event(event, repo)]
-            if new_events:
-                for event in reversed(new_events):
-                    message = self.format_event(event, repo)
+        for event in events:
+            created_at = event.get('created_at')
+            if not last_time or created_at > last_time:
+                new_events.append(event)
+
+        if new_events:
+            for event in reversed(new_events):
+                message = self.format_event(event, repo)
+                if message:
                     self.announce(message, irc, msg)
 
-    def is_new_event(self, event, repo):
-        created_at = event['commit']['committer']['date']
-        last_checked = self.last_checked.get(repo)
-        if last_checked and created_at <= last_checked:
-            return False
-        self.last_checked[repo] = created_at
-        return True
+            # Update last_checked to the newest event time
+            self.last_checked[repo] = new_events[0]['created_at']
 
     def format_event(self, event, repo):
-        commit_message = event['commit']['message'].split('\n')[0]
-        author = event['commit']['author']['name']
-        commit_url = event['html_url']
-
+        etype = event['type']
+        actor = event['actor']['login']
+        repo_display = repo
         BOLD = '\x02'
         COLOR = '\x03'
         RESET = '\x0f'
+        RED = '05'
         GREEN = '03'
+        CYAN = '10'
         BLUE = '12'
 
-        return (
-            f"{BOLD}{author}{BOLD} committed: "
-            f"{COLOR}{GREEN}{commit_message}{RESET} to "
-            f"{BOLD}{repo}{BOLD}: "
-            f"{COLOR}{BLUE}{commit_url}{RESET}"
-        )
+        if etype == 'PushEvent':
+            commits = event['payload'].get('commits', [])
+            msgs = []
+            for commit in commits:
+                msg = commit['message'].split('\n')[0]
+                url = f"https://github.com/{repo}/commit/{commit['sha']}"
+                msgs.append(f"{BOLD}{actor}{BOLD} pushed: {COLOR}{GREEN}{msg}{RESET} to {BOLD}{repo_display}{BOLD}: {COLOR}{BLUE}{url}{RESET}")
+            return '\n'.join(msgs)
+
+        elif etype == 'IssuesEvent':
+            action = event['payload']['action']
+            issue = event['payload']['issue']
+            title = issue['title']
+            url = issue['html_url']
+            return f"{BOLD}{actor}{BOLD} {action} issue: {COLOR}{CYAN}{title}{RESET} in {BOLD}{repo_display}{BOLD}: {COLOR}{BLUE}{url}{RESET}"
+
+        elif etype == 'PullRequestEvent':
+            action = event['payload']['action']
+            pr = event['payload']['pull_request']
+            title = pr['title']
+            url = pr['html_url']
+            return f"{BOLD}{actor}{BOLD} {action} PR: {COLOR}{CYAN}{title}{RESET} in {BOLD}{repo_display}{BOLD}: {COLOR}{BLUE}{url}{RESET}"
+
+        # You can add more events like ForkEvent, CreateEvent, etc. here
+
+        return None  # Ignore unhandled events
 
     def announce(self, message, irc, msg):
-        if msg is not None:
+        if msg:
             channel = msg.args[0]
             if channel:
-                irc.sendMsg(ircmsgs.privmsg(channel, message))
+                for line in message.split('\n'):
+                    irc.sendMsg(ircmsgs.privmsg(channel, line))
 
     def subscribe(self, irc, msg, args):
         """<owner/repo> -- Subscribe to a GitHub repository."""
         if len(args) < 1:
             irc.reply("Usage: subscribe owner/repo")
             return
-
         repo = args[0]
         if repo not in self.subscriptions:
             self.subscriptions.append(repo)
@@ -133,7 +148,6 @@ class GitPulse(callbacks.Plugin):
         if len(args) < 1:
             irc.reply("Usage: unsubscribe owner/repo")
             return
-
         repo = args[0]
         if repo in self.subscriptions:
             self.subscriptions.remove(repo)
@@ -144,7 +158,7 @@ class GitPulse(callbacks.Plugin):
     def fetchgitpulse(self, irc, msg, args):
         """Manually fetch events from all subscribed repositories."""
         for repo in self.subscriptions:
-            self.fetch_and_announce(repo, irc, msg)
+            self.fetch_and_announce(repo, irc, msg, manual=True)
 
     def die(self):
         super().die()

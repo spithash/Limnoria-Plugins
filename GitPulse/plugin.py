@@ -33,7 +33,6 @@ import requests
 from threading import Thread, Event
 from supybot import callbacks, ircmsgs
 
-
 class GitPulse(callbacks.Plugin):
     """GitHub activity monitor using Events API."""
 

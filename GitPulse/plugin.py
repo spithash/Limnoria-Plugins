@@ -111,7 +111,7 @@ class GitPulse(callbacks.Plugin):
 
         for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']
-            event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ')
+            event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
 
             # Check if the event occurred within the last 2 hours
             if now - event_timestamp > timedelta(hours=2):

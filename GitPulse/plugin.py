@@ -59,7 +59,7 @@ class GitPulse(callbacks.Plugin):
         """Start the polling process when the plugin is initialized."""
         if not self.polling_started:
             self.polling_started = True
-            self.log.info("Starting polling thread for GitHub events.")
+            self.log.info("[GitPulse] Starting polling thread for GitHub events.")
             self.polling_thread = Thread(target=self.poll, daemon=True)
             self.polling_thread.start()
 
@@ -68,12 +68,12 @@ class GitPulse(callbacks.Plugin):
         self.stop_polling_event.set()  # Trigger the stop event
         if self.polling_thread:
             self.polling_thread.join()  # Ensure that the thread stops gracefully
-        self.log.info("Polling thread stopped.")
+        self.log.info("[GitPulse] Polling thread stopped.")
 
     def poll(self):
         """Polls GitHub for events based on the repositories in the configuration."""
         while not self.stop_polling_event.is_set():
-            self.log.info("Polling for events...")
+            self.log.info("[GitPulse] Polling for events...")
 
             # Fetch subscribed repositories for all channels
             for channel in self.irc.state.channels:
@@ -86,12 +86,12 @@ class GitPulse(callbacks.Plugin):
                     self.fetch_and_announce(repo, self.irc, None, channel)
 
             # Wait for the configured poll interval before checking again
-            self.log.info(f"Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
+            self.log.info(f"[GitPulse] Waiting for {self.registryValue('pollInterval')} seconds before next poll.")
             self.stop_polling_event.wait(self.registryValue('pollInterval'))  # Use wait to respect the stop event
 
     def fetch_and_announce(self, repo, irc, msg, channel):
         """Fetch events from GitHub and announce them in the channel."""
-        self.log.debug(f"Fetching events for repository: {repo}")
+        self.log.debug(f"[GitPulse] Fetching events for repository: {repo}")
         token = self.registryValue('githubToken')
         headers = {'Authorization': f'token {token}'} if token else {}
         url = f"https://api.github.com/repos/{repo}/events"
@@ -102,7 +102,7 @@ class GitPulse(callbacks.Plugin):
             return
 
         events = resp.json()
-        self.log.debug(f"Fetched {len(events)} events for {repo}")
+        self.log.debug(f"[GitPulse] Fetched {len(events)} events for {repo}")
 
         seen_ids = self.load_global_seen_ids()
         new_ids = []
@@ -118,29 +118,29 @@ class GitPulse(callbacks.Plugin):
             if now - event_timestamp > timedelta(hours=2):
                 continue  # Skip events older than 2 hours
 
-            self.log.debug(f"Checking event ID {event_id} (created at {event_timestamp})")
+            self.log.debug(f"[GitPulse] Checking event ID {event_id} (created at {event_timestamp})")
 
             if event_id in seen_ids:
-                self.log.debug(f"Skipping event {event_id} (already seen)")
+                self.log.debug(f"[GitPulse] Skipping event {event_id} (already seen)")
                 continue  # Skip events that have already been posted
 
             # Process PushEvent
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
-                    self.log.info(f"Posting new event for {repo}: {msg_text}")
+                    self.log.info(f"[GitPulse] Posting new event for {repo}: {msg_text}")
                     # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
                     # After posting the event, save the event ID
                     new_ids.append(event_id)
                 else:
-                    self.log.debug(f"No commit message found for event {event_id}")
+                    self.log.debug(f"[GitPulse] No commit message found for event {event_id}")
 
             # Process PullRequestEvent
             elif event['type'] == 'PullRequestEvent':
                 msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
-                    self.log.info(f"Posting new event for {repo}: {msg_text}")
+                    self.log.info(f"[GitPulse] Posting new event for {repo}: {msg_text}")
                     # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
                     new_ids.append(event_id)
@@ -149,7 +149,7 @@ class GitPulse(callbacks.Plugin):
             elif event['type'] == 'IssuesEvent':
                 msg_text = self.format_issues_event(event, repo)
                 if msg_text:
-                    self.log.info(f"Posting new event for {repo}: {msg_text}")
+                    self.log.info(f"[GitPulse] Posting new event for {repo}: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
                     new_ids.append(event_id)
 
@@ -157,7 +157,7 @@ class GitPulse(callbacks.Plugin):
             # Save event IDs after posting the events
             self.save_global_seen_ids(new_ids)
         else:
-            self.log.debug(f"No new events to post for {repo}")
+            self.log.debug(f"[GitPulse] No new events to post for {repo}")
 
     def format_push_event(self, event, repo):
         """Formats the PushEvent into a human-readable string."""
@@ -201,16 +201,16 @@ class GitPulse(callbacks.Plugin):
     def announce(self, message, irc, msg, channel):
         """Announce the formatted message in the channel."""
         if not channel:
-            self.log.warning("No channel specified for announcement.")
+            self.log.warning("[GitPulse] No channel specified for announcement.")
             return
         for line in message.split('\n'):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
-            self.log.info(f"Posted message to channel {channel}: {line}")
+            self.log.info(f"[GitPulse] Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
         """Subscribe to a GitHub repository and immediately show the latest event."""
         if not args:
-            irc.reply("Usage: subscribe owner/repo")
+            irc.reply("[GitPulse] Usage: subscribe owner/repo")
             return
 
         repo = args[0]
@@ -225,17 +225,17 @@ class GitPulse(callbacks.Plugin):
         if repo not in subscriptions:
             subscriptions.append(repo)
             self.save_subscriptions(channel, subscriptions)
-            irc.reply(f"Subscribed to {repo} in channel {channel}.")
+            irc.reply(f"[GitPulse] Subscribed to {repo} in channel {channel}.")
 
             # Fetch the latest event for this newly subscribed repo and show it immediately
             self.fetch_and_announce(repo, irc, msg, channel)
         else:
-            irc.reply(f"Already subscribed to {repo} in channel {channel}.")
+            irc.reply(f"[GitPulse] Already subscribed to {repo} in channel {channel}.")
 
     def unsubscribe(self, irc, msg, args):
         """Unsubscribe from a GitHub repository."""
         if not args:
-            irc.reply("Usage: unsubscribe owner/repo")
+            irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
             return
 
         repo = args[0]
@@ -250,9 +250,9 @@ class GitPulse(callbacks.Plugin):
         if repo in subscriptions:
             subscriptions.remove(repo)
             self.save_subscriptions(channel, subscriptions)
-            irc.reply(f"Unsubscribed from {repo} in channel {channel}.")
+            irc.reply(f"[GitPulse] Unsubscribed from {repo} in channel {channel}.")
         else:
-            irc.reply(f"Not subscribed to {repo} in channel {channel}.")
+            irc.reply(f"[GitPulse] Not subscribed to {repo} in channel {channel}.")
 
     def save_subscriptions(self, channel, subscriptions):
         """Save subscriptions for the channel in the configuration."""
@@ -287,9 +287,9 @@ class GitPulse(callbacks.Plugin):
             subscriptions = subscriptions.split()
 
         if subscriptions:
-            irc.reply(f"Subscribed to the following repositories in {channel}: {', '.join(subscriptions)}")
+            irc.reply(f"[GitPulse] Subscribed to the following repositories in {channel}: {', '.join(subscriptions)}")
         else:
-            irc.reply(f"No repositories subscribed to in {channel}.")
+            irc.reply(f"[GitPulse] No repositories subscribed to in {channel}.")
 
 
 Class = GitPulse

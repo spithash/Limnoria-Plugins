@@ -105,31 +105,21 @@ class GitPulse(callbacks.Plugin):
                 self.log.debug(f"Skipping event {event_id} (already seen)")
                 continue  # Skip events that have already been posted
 
-            # Process PushEvent
+            # Process specific event types
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
                     self.log.info(f"Posting new event for {repo}: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
                     new_ids.append(event_id)
-            
-            # Process Issues (open/close)
-            elif event['type'] == 'IssuesEvent':
+
+            elif event['type'] == 'IssueEvent':
                 msg_text = self.format_issue_event(event, repo)
                 if msg_text:
                     self.log.info(f"Posting new issue event for {repo}: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
                     new_ids.append(event_id)
 
-            # Process IssueCommentEvent
-            elif event['type'] == 'IssueCommentEvent':
-                msg_text = self.format_issue_comment_event(event, repo)
-                if msg_text:
-                    self.log.info(f"Posting new issue comment event for {repo}: {msg_text}")
-                    self.announce(msg_text, irc, msg, channel)
-                    new_ids.append(event_id)
-
-            # Process PullRequestEvent
             elif event['type'] == 'PullRequestEvent':
                 msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
@@ -152,89 +142,75 @@ class GitPulse(callbacks.Plugin):
         RESET = '\x0f'
         GREEN = '03'
         BLUE = '12'
-        RED = '04'
-
-        branch = event['payload']['ref'].split('/')[-1]  # Get the branch name
 
         if commits:
             msgs = []
             for c in commits:
                 msg = c['message'].split('\n')[0]  # Only the first line of the commit message
                 url = f"https://github.com/{repo}/commit/{c['sha']}"
-                msgs.append(f"{B}{actor}{B} pushed: {C}{RED}branch: {B}{branch}{RESET} {C}{GREEN}{msg}{RESET} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
+                branch = c.get('ref', '').replace('refs/heads/', '')
+                branch_text = f" {B}{C}{GREEN}branch: {RESET}{B}{C}{GREEN}{branch}{RESET}" if branch else ""
+                msgs.append(f"{B}{actor}{B} pushed: {C}{GREEN}{msg}{RESET}{branch_text} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
             return '\n'.join(msgs)
         return None
-
-    def format_issue_event(self, event, repo):
-        """Formats the IssueEvent into a human-readable string, including issue status."""
-        actor = event['actor']['login']
-        issue = event['payload']['issue']
-        state = issue['state']  # 'open' or 'closed'
-        title = issue['title']
-        number = issue['number']
-        url = issue['html_url']
-
-        B = '\x02'  # Bold
-        C = '\x03'  # Color
-        RESET = '\x0f'  # Reset
-        RED = '04'  # Red color for 'open' issues
-        GREEN = '03'  # Green color for commit message
-        BLUE = '12'  # Blue color for URLs
-
-        # Display 'open' in red if the issue is open
-        state_text = f"{B}{state}{RESET}" if state != 'open' else f"{B}{C}{RED}open{RESET}"
-
-        return f"{B}{actor}{B} {state_text} issue #{number}: {C}{GREEN}{title}{RESET} {C}{BLUE}{url}{RESET}"
-
-    def format_issue_comment_event(self, event, repo):
-        """Formats the IssueCommentEvent into a human-readable string."""
-        actor = event['actor']['login']
-        comment = event['payload']['comment']
-        issue = event['payload']['issue']
-        issue_number = issue['number']
-        issue_title = issue['title']
-        comment_body = comment['body']
-        url = comment['html_url']
-
-        B = '\x02'  # Bold
-        C = '\x03'  # Color
-        RESET = '\x0f'  # Reset
-        GREEN = '03'  # Green color for commit message
-        BLUE = '12'  # Blue color for URLs
-
-        return f"{B}{actor}{B} commented on issue #{issue_number} ({C}{GREEN}{issue_title}{RESET}): {C}{BLUE}{comment_body}{RESET} {C}{BLUE}{url}{RESET}"
 
     def format_pull_request_event(self, event, repo):
         """Formats the PullRequestEvent into a human-readable string."""
         actor = event['actor']['login']
         pr = event['payload']['pull_request']
-        action = event['payload']['action']  # open, close, etc.
-        title = pr['title']
-        number = pr['number']
-        url = pr['html_url']
+        pr_url = pr['html_url']
+        state = pr['state']
+        pr_title = pr['title']
 
-        B = '\x02'  # Bold
-        C = '\x03'  # Color
-        RESET = '\x0f'  # Reset
-        GREEN = '03'  # Green color for commit message
-        BLUE = '12'  # Blue color for URLs
+        B = '\x02'
+        C = '\x03'
+        RESET = '\x0f'
+        GREEN = '03'
+        BLUE = '12'
+        RED = '04'
 
-        return f"{B}{actor}{B} {action} pull request #{number}: {C}{GREEN}{title}{RESET} {C}{BLUE}{url}{RESET}"
+        # Set color for 'opened' and 'closed' status
+        if state == 'open':
+            state_text = f"{B}{C}{GREEN}opened{RESET}"
+        else:
+            state_text = f"{B}{C}{BLUE}closed{RESET}"
+
+        # Format the PR message
+        msg = f"{B}{actor}{B} {state_text} pull request: {C}{GREEN}{pr_title}{RESET} in {B}{repo}{B}: {C}{BLUE}{pr_url}{RESET}"
+        return msg
+
+    def format_issue_event(self, event, repo):
+        """Formats the IssueEvent into a human-readable string."""
+        actor = event['actor']['login']
+        issue = event['payload']['issue']
+        issue_url = issue['html_url']
+        state = issue['state']
+        issue_title = issue['title']
+
+        B = '\x02'
+        C = '\x03'
+        RESET = '\x0f'
+        GREEN = '03'
+        BLUE = '12'
+        RED = '04'
+
+        # Set color for 'opened' and 'closed' status, and always red for 'issue'
+        if state == 'open':
+            state_text = f"{B}{C}{RED}opened{RESET}"
+        else:
+            state_text = f"{B}{C}{GREEN}closed{RESET}"
+
+        msg = f"{B}{actor}{B} {C}{RED}issue{RESET} {state_text}: {C}{GREEN}{issue_title}{RESET} in {B}{repo}{B}: {C}{BLUE}{issue_url}{RESET}"
+        return msg
 
     def announce(self, message, irc, msg, channel):
         """Announce the formatted message in the channel."""
         if not channel:
             self.log.warning("No channel specified for announcement.")
             return
-
-        # Split the message by newlines and send each line separately
-        for line in message.splitlines():
-            # Strip leading/trailing whitespace from each line
-            line = line.strip()
-
-            if line:  # Only send non-empty lines
-                irc.sendMsg(ircmsgs.privmsg(channel, line))
-                self.log.info(f"Posted message to channel {channel}: {line}")
+        for line in message.split('\n'):
+            irc.sendMsg(ircmsgs.privmsg(channel, line))
+            self.log.info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
         """Subscribe to a GitHub repository and immediately show the latest event."""
@@ -308,10 +284,10 @@ class GitPulse(callbacks.Plugin):
     def listgitpulse(self, irc, msg, args):
         """Lists all repositories currently subscribed to in the channel."""
         channel = msg.args[0]
-        
+
         # Fetch current subscriptions
         subscriptions = self.registryValue('subscriptions', channel)
-        
+
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
 

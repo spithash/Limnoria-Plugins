@@ -28,10 +28,9 @@
 
 ###
 
-import time
 import requests
 from threading import Thread, Event
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supybot import callbacks, ircmsgs
 
 class GitPulse(callbacks.Plugin):
@@ -108,7 +107,7 @@ class GitPulse(callbacks.Plugin):
         new_ids = []
 
         # Get the current time
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']

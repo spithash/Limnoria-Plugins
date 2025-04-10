@@ -31,8 +31,8 @@
 import time
 import requests
 from threading import Thread, Event
+from datetime import datetime, timedelta
 from supybot import callbacks, ircmsgs
-
 
 class GitPulse(callbacks.Plugin):
     """GitHub activity monitor using Events API."""
@@ -107,9 +107,18 @@ class GitPulse(callbacks.Plugin):
         seen_ids = self.load_global_seen_ids()
         new_ids = []
 
+        # Get the current time
+        now = datetime.utcnow()
+
         for event in reversed(events):  # Reverse to get the latest events first
             event_id = event['id']
-            self.log.debug(f"Checking event ID {event_id}")
+            event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+            # Check if the event occurred within the last 2 hours
+            if now - event_timestamp > timedelta(hours=2):
+                continue  # Skip events older than 2 hours
+
+            self.log.debug(f"Checking event ID {event_id} (created at {event_timestamp})")
 
             if event_id in seen_ids:
                 self.log.debug(f"Skipping event {event_id} (already seen)")

@@ -226,9 +226,15 @@ class GitPulse(callbacks.Plugin):
         if not channel:
             self.log.warning("No channel specified for announcement.")
             return
-        for line in message.split('\n'):
-            irc.sendMsg(ircmsgs.privmsg(channel, line))
-            self.log.info(f"Posted message to channel {channel}: {line}")
+
+        # Split the message by newlines and send each line separately
+        for line in message.splitlines():
+            # Strip leading/trailing whitespace from each line
+            line = line.strip()
+
+            if line:  # Only send non-empty lines
+                irc.sendMsg(ircmsgs.privmsg(channel, line))
+                self.log.info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
         """Subscribe to a GitHub repository and immediately show the latest event."""

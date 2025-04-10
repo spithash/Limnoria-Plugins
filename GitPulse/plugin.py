@@ -37,6 +37,14 @@ from supybot import callbacks, ircmsgs
 class GitPulse(callbacks.Plugin):
     """GitHub activity monitor using Events API."""
 
+    # Color constants
+    BOLD = '\x02'
+    RESET = '\x0f'
+    BLUE = '\x03' + '12'  # Blue
+    GREEN = '\x03' + '03'  # Green
+    RED = '\x03' + '04'  # Red
+    YELLOW = '\x03' + '08'  # Yellow
+
     def __init__(self, irc):
         super().__init__(irc)
         self.irc = irc
@@ -105,27 +113,41 @@ class GitPulse(callbacks.Plugin):
                 self.log.debug(f"Skipping event {event_id} (already seen)")
                 continue  # Skip events that have already been posted
 
-            # Process specific event types
+            # Handle PushEvent (commits)
             if event['type'] == 'PushEvent':
                 msg_text = self.format_push_event(event, repo)
                 if msg_text:
                     self.log.info(f"Posting new event for {repo}: {msg_text}")
+                    # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
+                    # After posting the event, save the event ID
                     new_ids.append(event_id)
+                else:
+                    self.log.debug(f"No commit message found for event {event_id}")
 
-            elif event['type'] == 'IssueEvent':
-                msg_text = self.format_issue_event(event, repo)
-                if msg_text:
-                    self.log.info(f"Posting new issue event for {repo}: {msg_text}")
-                    self.announce(msg_text, irc, msg, channel)
-                    new_ids.append(event_id)
-
+            # Handle PullRequestEvent
             elif event['type'] == 'PullRequestEvent':
                 msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
                     self.log.info(f"Posting new pull request event for {repo}: {msg_text}")
+                    # First, post the event to the channel
                     self.announce(msg_text, irc, msg, channel)
+                    # After posting the event, save the event ID
                     new_ids.append(event_id)
+                else:
+                    self.log.debug(f"No PR message found for event {event_id}")
+
+            # Handle IssuesEvent
+            elif event['type'] == 'IssuesEvent':
+                msg_text = self.format_issue_event(event, repo)
+                if msg_text:
+                    self.log.info(f"Posting new issue event for {repo}: {msg_text}")
+                    # First, post the event to the channel
+                    self.announce(msg_text, irc, msg, channel)
+                    # After posting the event, save the event ID
+                    new_ids.append(event_id)
+                else:
+                    self.log.debug(f"No issue message found for event {event_id}")
 
         if new_ids:
             # Save event IDs after posting the events
@@ -136,72 +158,48 @@ class GitPulse(callbacks.Plugin):
     def format_push_event(self, event, repo):
         """Formats the PushEvent into a human-readable string."""
         actor = event['actor']['login']
-        commits = event['payload'].get('commits', [])
-        B = '\x02'
-        C = '\x03'
-        RESET = '\x0f'
-        GREEN = '03'
-        BLUE = '12'
+        commits = event['payload']['commits']
+        repo_name = repo
 
-        if commits:
-            msgs = []
-            for c in commits:
-                msg = c['message'].split('\n')[0]  # Only the first line of the commit message
-                url = f"https://github.com/{repo}/commit/{c['sha']}"
-                branch = c.get('ref', '').replace('refs/heads/', '')
-                branch_text = f" {B}{C}{GREEN}branch: {RESET}{B}{C}{GREEN}{branch}{RESET}" if branch else ""
-                msgs.append(f"{B}{actor}{B} pushed: {C}{GREEN}{msg}{RESET}{branch_text} to {B}{repo}{B}: {C}{BLUE}{url}{RESET}")
-            return '\n'.join(msgs)
-        return None
+        commit_messages = '\n'.join([commit['message'] for commit in commits])
+        commit_count = len(commits)
+
+        # Format the commit message with commit count
+        return f"{self.BOLD}{actor}{self.BOLD} pushed {commit_count} commit{'' if commit_count == 1 else 's'} to {self.GREEN}{repo_name}{self.RESET}: {self.GREEN}{commit_messages[:200]}{self.RESET}"
 
     def format_pull_request_event(self, event, repo):
         """Formats the PullRequestEvent into a human-readable string."""
         actor = event['actor']['login']
-        pr = event['payload']['pull_request']
-        pr_url = pr['html_url']
-        state = pr['state']
-        pr_title = pr['title']
+        pr_action = event['payload']['action']
+        pr_url = event['payload']['pull_request']['html_url']
+        pr_branch = event['payload']['pull_request']['head']['ref']  # The source branch of the PR
 
-        B = '\x02'
-        C = '\x03'
-        RESET = '\x0f'
-        GREEN = '03'
-        BLUE = '12'
-        RED = '04'
-
-        # Set color for 'opened' and 'closed' status
-        if state == 'open':
-            state_text = f"{B}{C}{GREEN}opened{RESET}"
-        else:
-            state_text = f"{B}{C}{BLUE}closed{RESET}"
-
-        # Format the PR message
-        msg = f"{B}{actor}{B} {state_text} pull request: {C}{GREEN}{pr_title}{RESET} in {B}{repo}{B}: {C}{BLUE}{pr_url}{RESET}"
-        return msg
+        return f"{self.BOLD}{actor}{self.BOLD} {self.color_pull_request_action(pr_action)} PR: {self.GREEN}{pr_branch}{self.RESET} at {self.BOLD}{repo}{self.BOLD}: {self.BLUE}{pr_url}{self.RESET}"
 
     def format_issue_event(self, event, repo):
-        """Formats the IssueEvent into a human-readable string."""
+        """Formats the IssuesEvent into a human-readable string."""
         actor = event['actor']['login']
-        issue = event['payload']['issue']
-        issue_url = issue['html_url']
-        state = issue['state']
-        issue_title = issue['title']
+        issue_action = event['payload']['action']
+        issue_url = event['payload']['issue']['html_url']
+        issue_title = event['payload']['issue']['title']
 
-        B = '\x02'
-        C = '\x03'
-        RESET = '\x0f'
-        GREEN = '03'
-        BLUE = '12'
-        RED = '04'
+        return f"{self.BOLD}{actor}{self.BOLD} {self.color_issue_action(issue_action)} issue: {self.RED}{issue_title}{self.RESET} at {self.BOLD}{repo}{self.BOLD}: {self.BLUE}{issue_url}{self.RESET}"
 
-        # Set color for 'opened' and 'closed' status, and always red for 'issue'
-        if state == 'open':
-            state_text = f"{B}{C}{RED}opened{RESET}"
-        else:
-            state_text = f"{B}{C}{GREEN}closed{RESET}"
+    def color_pull_request_action(self, action):
+        """Returns the colored version of the pull request action (opened or closed)."""
+        if action == 'opened':
+            return self.GREEN  # Green
+        elif action == 'closed':
+            return self.BLUE  # Blue
+        return action
 
-        msg = f"{B}{actor}{B} {C}{RED}issue{RESET} {state_text}: {C}{GREEN}{issue_title}{RESET} in {B}{repo}{B}: {C}{BLUE}{issue_url}{RESET}"
-        return msg
+    def color_issue_action(self, action):
+        """Returns the colored version of the issue action (opened or closed)."""
+        if action == 'opened':
+            return self.RED  # Red
+        elif action == 'closed':
+            return self.GREEN  # Green
+        return action
 
     def announce(self, message, irc, msg, channel):
         """Announce the formatted message in the channel."""
@@ -284,10 +282,10 @@ class GitPulse(callbacks.Plugin):
     def listgitpulse(self, irc, msg, args):
         """Lists all repositories currently subscribed to in the channel."""
         channel = msg.args[0]
-
+        
         # Fetch current subscriptions
         subscriptions = self.registryValue('subscriptions', channel)
-
+        
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
 

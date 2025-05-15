@@ -113,9 +113,9 @@ class GitPulse(callbacks.Plugin):
             event_id = event['id']
             event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
 
-            # Check if the event occurred within the last 2 hours
-            if now - event_timestamp > timedelta(hours=2):
-                continue  # Skip events older than 2 hours
+            # Check if the event occurred within the last 24 hours
+            if now - event_timestamp > timedelta(hours=24):
+                continue  # Skip events older than 24 hours
 
             self.log.debug(f"[GitPulse] Checking event ID {event_id} (created at {event_timestamp})")
 

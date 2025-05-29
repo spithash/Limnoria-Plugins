@@ -85,9 +85,30 @@ class GitPulse(callbacks.Plugin):
     def fetch_and_announce(self, repo, irc, msg, channel):
         self.log.debug(f"[GitPulse] Fetching events for repository: {repo}")
         token = self.registryValue('githubToken')
-        headers = {'Authorization': f'token {token}'} if token else {}
+        headers = {'Cache-Control': 'no-cache'}
+        if token:
+            headers['Authorization'] = f'token {token}'
+        
         url = f"https://api.github.com/repos/{repo}/events"
         resp = requests.get(url, headers=headers)
+
+        rate_limit = resp.headers.get('X-RateLimit-Limit')
+        rate_remaining = resp.headers.get('X-RateLimit-Remaining')
+        rate_reset = resp.headers.get('X-RateLimit-Reset')
+
+        self.log.info(
+            f"[GitPulse] Rate Limit: {rate_remaining}/{rate_limit} remaining. Resets at {datetime.utcfromtimestamp(int(rate_reset or 0)).isoformat()} UTC"
+        )
+
+        # Auto-throttle if rate limit is too low
+        if rate_remaining is not None and int(rate_remaining) < 100:
+            reset_time = datetime.utcfromtimestamp(int(rate_reset or 0)).isoformat()
+            self.log.warning(f"[GitPulse] Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch. Resets at {reset_time} UTC")
+            return  # or optionally sleep longer, or set a global flag
+
+        if resp.status_code == 304:
+            self.log.info(f"[GitPulse] No new data (304 Not Modified) for {repo}")
+            return
 
         if resp.status_code != 200:
             self.log.error(f"[GitPulse] Failed to fetch events for {repo}: {resp.status_code}")

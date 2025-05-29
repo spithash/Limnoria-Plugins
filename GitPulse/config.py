@@ -60,8 +60,5 @@ conf.registerGlobalValue(GitPulse, 'githubToken',
 conf.registerChannelValue(GitPulse, 'subscriptions',
     registry.String("", "List of subscribed GitHub repositories per channel (space-separated).", private=True))
 
-# Global event history across all channels/repos
-conf.registerGlobalValue(GitPulse, 'history', 
-    registry.String('', "Global history of event IDs (private).", private=True))
 
 

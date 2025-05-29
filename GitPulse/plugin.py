@@ -88,40 +88,57 @@ class GitPulse(callbacks.Plugin):
         headers = {'Cache-Control': 'no-cache'}
         if token:
             headers['Authorization'] = f'token {token}'
-        
+
         url = f"https://api.github.com/repos/{repo}/events"
         resp = requests.get(url, headers=headers)
 
         rate_limit = resp.headers.get('X-RateLimit-Limit')
         rate_remaining = resp.headers.get('X-RateLimit-Remaining')
+        rate_used = resp.headers.get('X-RateLimit-Used')
         rate_reset = resp.headers.get('X-RateLimit-Reset')
 
+        reset_time_str = "unknown"
+        try:
+            if rate_reset:
+                reset_time_str = datetime.utcfromtimestamp(int(rate_reset)).isoformat()
+        except Exception as e:
+            self.log.warning(f"[GitPulse] Could not parse rate reset time: {e}")
+
         self.log.info(
-            f"[GitPulse] Rate Limit: {rate_remaining}/{rate_limit} remaining. Resets at {datetime.utcfromtimestamp(int(rate_reset or 0)).isoformat()} UTC"
+            f"[GitPulse] Repo: {repo} | Status: {resp.status_code} | Rate: Used {rate_used}, Remaining {rate_remaining}/{rate_limit} | Resets at {reset_time_str} UTC"
         )
 
-        # Auto-throttle if rate limit is too low
+        # Early bail on rate limits
         if rate_remaining is not None and int(rate_remaining) < 100:
-            reset_time = datetime.utcfromtimestamp(int(rate_reset or 0)).isoformat()
-            self.log.warning(f"[GitPulse] Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch. Resets at {reset_time} UTC")
-            return  # or optionally sleep longer, or set a global flag
+            self.log.warning(f"[GitPulse] Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch for {repo}. Resets at {reset_time_str} UTC")
+            return
 
         if resp.status_code == 304:
             self.log.info(f"[GitPulse] No new data (304 Not Modified) for {repo}")
             return
 
         if resp.status_code != 200:
-            self.log.error(f"[GitPulse] Failed to fetch events for {repo}: {resp.status_code}")
+            self.log.error(f"[GitPulse] Failed to fetch events for {repo}: HTTP {resp.status_code}")
             return
 
-        events = resp.json()
+        try:
+            events = resp.json()
+        except Exception as e:
+            self.log.error(f"[GitPulse] Failed to parse JSON response: {e}")
+            return
+
         self.log.debug(f"[GitPulse] Fetched {len(events)} events for {repo}")
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(minutes=30)
 
         for event in reversed(events):
-            event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+            try:
+                event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+            except Exception as e:
+                self.log.warning(f"[GitPulse] Skipping event due to invalid timestamp: {e}")
+                continue
+
             if event_timestamp < cutoff:
                 continue
 

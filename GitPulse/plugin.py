@@ -43,6 +43,7 @@ class GitPulse(callbacks.Plugin):
         self.polling_started = False
         self.polling_thread = None
         self.stop_polling_event = Event()
+        self.etags = {}
 
         self.B = '\x02'  # Bold
         self.C = '\x03'  # Color prefix
@@ -90,6 +91,11 @@ class GitPulse(callbacks.Plugin):
         if token:
             headers['Authorization'] = f'token {token}'
 
+        # Add If-None-Match header if we have a stored ETag for this repo
+        etag = self.etags.get(repo)
+        if etag:
+            headers['If-None-Match'] = etag
+
         url = f"https://api.github.com/repos/{repo}/events"
         resp = requests.get(url, headers=headers)
 
@@ -121,6 +127,11 @@ class GitPulse(callbacks.Plugin):
         if resp.status_code != 200:
             self.log.error(f"[GitPulse] Failed to fetch events for {repo}: HTTP {resp.status_code}")
             return
+
+        # Save ETag for next request
+        new_etag = resp.headers.get('ETag')
+        if new_etag:
+            self.etags[repo] = new_etag
 
         try:
             events = resp.json()

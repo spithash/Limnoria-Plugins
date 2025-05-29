@@ -91,13 +91,14 @@ class GitPulse(callbacks.Plugin):
         if token:
             headers['Authorization'] = f'token {token}'
 
-        # Add If-None-Match header if we have a stored ETag for this repo
-        etag = self.etags.get(repo)
-        if etag:
-            headers['If-None-Match'] = etag
+        etag_sent = self.etags.get(repo)
+        if etag_sent:
+            headers['If-None-Match'] = etag_sent
 
         url = f"https://api.github.com/repos/{repo}/events"
         resp = requests.get(url, headers=headers)
+
+        etag_received = resp.headers.get('ETag')
 
         rate_limit = resp.headers.get('X-RateLimit-Limit')
         rate_remaining = resp.headers.get('X-RateLimit-Remaining')
@@ -112,10 +113,12 @@ class GitPulse(callbacks.Plugin):
             self.log.warning(f"[GitPulse] Could not parse rate reset time: {e}")
 
         self.log.info(
-            f"[GitPulse] Repo: {repo} | Status: {resp.status_code} | Rate: Used {rate_used}, Remaining {rate_remaining}/{rate_limit} | Resets at {reset_time_str} UTC"
+            f"[GitPulse] Repo: {repo} | Status: {resp.status_code} | "
+            f"Rate: Used {rate_used}, Remaining {rate_remaining}/{rate_limit} | "
+            f"Resets at {reset_time_str} UTC | "
+            f"ETag sent: {etag_sent} | ETag received: {etag_received}"
         )
 
-        # Auto-throttle if rate limit is too low
         if rate_remaining is not None and int(rate_remaining) < 100:
             self.log.warning(f"[GitPulse] Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch for {repo}. Resets at {reset_time_str} UTC")
             return
@@ -128,10 +131,8 @@ class GitPulse(callbacks.Plugin):
             self.log.error(f"[GitPulse] Failed to fetch events for {repo}: HTTP {resp.status_code}")
             return
 
-        # Save ETag for next request
-        new_etag = resp.headers.get('ETag')
-        if new_etag:
-            self.etags[repo] = new_etag
+        if etag_received:
+            self.etags[repo] = etag_received
 
         try:
             events = resp.json()

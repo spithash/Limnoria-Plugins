@@ -32,6 +32,7 @@ import requests
 from threading import Thread, Event
 from datetime import datetime, timedelta, timezone
 from supybot import callbacks, ircmsgs
+from supybot.commands import wrap
 
 class GitPulse(callbacks.Plugin):
     """GitHub activity monitor using Events API."""
@@ -254,7 +255,9 @@ class GitPulse(callbacks.Plugin):
         else:
             irc.reply(f"[GitPulse] No repositories subscribed to in {channel}.")
 
+    @wrap(['owner'])
     def fetchgitpulse(self, irc, msg, args):
+        """Manually fetch recent GitHub events for all subscribed repositories in the current channel."""
         channel = msg.args[0]
         subscriptions = self.registryValue('subscriptions', channel)
         if isinstance(subscriptions, str):

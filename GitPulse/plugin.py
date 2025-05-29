@@ -108,7 +108,7 @@ class GitPulse(callbacks.Plugin):
             f"[GitPulse] Repo: {repo} | Status: {resp.status_code} | Rate: Used {rate_used}, Remaining {rate_remaining}/{rate_limit} | Resets at {reset_time_str} UTC"
         )
 
-        # Early bail on rate limits
+        # Auto-throttle if rate limit is too low
         if rate_remaining is not None and int(rate_remaining) < 100:
             self.log.warning(f"[GitPulse] Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch for {repo}. Resets at {reset_time_str} UTC")
             return

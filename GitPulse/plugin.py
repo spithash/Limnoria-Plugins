@@ -216,7 +216,8 @@ class GitPulse(callbacks.Plugin):
         self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=12)  # Ignore events older than 3 days
+        # Ignore events older than 12 hours
+        cutoff = now - timedelta(hours=12)
 
         # Process events in reverse order (oldest first)
         for event in reversed(events):
@@ -266,6 +267,8 @@ class GitPulse(callbacks.Plugin):
             return
 
         now = datetime.now(timezone.utc)
+
+        # # Ignore events older than 1 hour
         cutoff = now - timedelta(hours=1)
 
         for commit in reversed(commits):

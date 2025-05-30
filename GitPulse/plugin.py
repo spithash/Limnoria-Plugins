@@ -231,13 +231,7 @@ class GitPulse(callbacks.Plugin):
                 continue
 
             # Only announce certain event types for now
-            if event['type'] == 'PushEvent':
-                msg_text = self.format_push_event(event, repo)
-                if msg_text:
-                    self.log_info(f"Posting PushEvent: {msg_text}")
-                    self.announce(msg_text, irc, msg, channel)
-
-            elif event['type'] == 'PullRequestEvent':
+            if event['type'] == 'PullRequestEvent':
                 msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
                     self.log_info(f"Posting PullRequestEvent: {msg_text}")
@@ -248,6 +242,50 @@ class GitPulse(callbacks.Plugin):
                 if msg_text:
                     self.log_info(f"Posting IssuesEvent: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
+
+        # Fetch and announce commits separately from the commits API
+        self.fetch_and_announce_commits(repo, irc, msg, channel)
+
+    def fetch_and_announce_commits(self, repo, irc, msg, channel):
+        """Fetch latest commits separately from the GitHub commits API and announce."""
+        self.log_debug(f"Fetching commits for repository: {repo}")
+        token = self.registryValue('githubToken')
+        headers = {'Cache-Control': 'no-cache'}
+        if token:
+            headers['Authorization'] = f'token {token}'
+
+        url = f"https://api.github.com/repos/{repo}/commits"
+        try:
+            resp = requests.get(url, headers=headers)
+            if resp.status_code != 200:
+                self.log_error(f"Failed to fetch commits for {repo}: HTTP {resp.status_code}")
+                return
+            commits = resp.json()
+        except Exception as e:
+            self.log_error(f"Error fetching commits: {e}")
+            return
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=3)
+
+        for commit in reversed(commits):
+            try:
+                commit_time = datetime.strptime(commit['commit']['committer']['date'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                if commit_time < cutoff:
+                    continue
+                event = {
+                    'actor': {'login': commit['commit']['committer']['name']},
+                    'payload': {
+                        'commits': [{'message': commit['commit']['message'], 'sha': commit['sha']}],
+                        'ref': 'refs/heads/main'
+                    }
+                }
+                msg_text = self.format_push_event(event, repo)
+                if msg_text:
+                    self.log_info(f"Posting commit: {msg_text}")
+                    self.announce(msg_text, irc, msg, channel)
+            except Exception as e:
+                self.log_warning(f"Error parsing commit: {e}")
 
     def format_push_event(self, event, repo):
         """Format a push event into a nicely colored IRC message."""

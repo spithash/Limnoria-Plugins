@@ -39,7 +39,7 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 class GitPulse(callbacks.Plugin):
-    """Plugin that monitors GitHub repositories for activity using the GitHub Events & Commits API."""
+    """Plugin that monitors GitHub repositories for activity using the GitHub Events & Commits API. Available commands are 'subscribe', 'unsubscribe', 'listgitpulse' and 'fetchgitpulse'"""
 
     def __init__(self, irc):
         super().__init__(irc)
@@ -145,7 +145,7 @@ class GitPulse(callbacks.Plugin):
             headers['Authorization'] = f'token {token}'
 
         # Send ETag to use conditional requests and reduce API rate limit usage
-        etag_sent = self.etags.get(f"{repo}::events")
+        etag_sent = self.etags.get(f"{channel}::{repo}::events")
         if etag_sent:
             headers['If-None-Match'] = etag_sent
 
@@ -206,7 +206,7 @@ class GitPulse(callbacks.Plugin):
 
         # Update stored ETag for next request
         if etag_received:
-            self.etags[f"{repo}::events"] = etag_received
+            self.etags[f"{channel}::{repo}::events"] = etag_received
 
         # Try parsing JSON response
         try:
@@ -257,7 +257,7 @@ class GitPulse(callbacks.Plugin):
         if token:
             headers['Authorization'] = f'token {token}'
 
-        etag_sent = self.etags.get(f"{repo}::commits")
+        etag_sent = self.etags.get(f"{channel}::{repo}::commits")
         if etag_sent:
             headers['If-None-Match'] = etag_sent
 
@@ -310,7 +310,7 @@ class GitPulse(callbacks.Plugin):
             return
 
         if etag_received:
-            self.etags[f"{repo}::commits"] = etag_received
+            self.etags[f"{channel}::{repo}::commits"] = etag_received
 
         try:
             commits = resp.json()

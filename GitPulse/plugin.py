@@ -216,7 +216,7 @@ class GitPulse(callbacks.Plugin):
         self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=1)  # Ignore events older than 3 days
+        cutoff = now - timedelta(hours=12)  # Ignore events older than 3 days
 
         # Process events in reverse order (oldest first)
         for event in reversed(events):

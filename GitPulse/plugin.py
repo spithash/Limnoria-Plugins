@@ -65,13 +65,13 @@ class GitPulse(callbacks.Plugin):
         self.start_polling()
 
         # IRC formatting codes for messages
-        self.B = '\x02'  # Bold
-        self.C = '\x03'  # IRC color code prefix
-        self.RESET = '\x0f'  # Reset IRC formatting
-        self.GREEN = '03'
-        self.BLUE = '12'
-        self.RED = '04'
-        self.YELLOW = '08'
+        self.B = '\x02'     # Bold
+        self.C = '\x03'     # IRC color code prefix
+        self.RESET = '\x0f' # Reset IRC formatting
+        self.GREEN = '03'   # Green
+        self.BLUE = '12'    # Blue
+        self.RED = '04'     # Red
+        self.YELLOW = '08'  # Yellow
 
     def get_timestamp(self):
         """Get current UTC time in ISO8601 format with bright cyan color for console logs."""

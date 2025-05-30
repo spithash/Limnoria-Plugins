@@ -145,7 +145,7 @@ class GitPulse(callbacks.Plugin):
             headers['Authorization'] = f'token {token}'
 
         # Send ETag to use conditional requests and reduce API rate limit usage
-        etag_sent = self.etags.get(repo)
+        etag_sent = self.etags.get(f"{repo}::events")
         if etag_sent:
             headers['If-None-Match'] = etag_sent
 
@@ -195,6 +195,8 @@ class GitPulse(callbacks.Plugin):
         # If content not modified since last poll, no need to parse further
         if resp.status_code == 304:
             self.log_info(f"No new data (304 Not Modified) for {repo_c}")
+            # Still fetch and announce commits even if /events is not modified
+            self.fetch_and_announce_commits(repo, irc, msg, channel)
             return
 
         # Log an error if request failed
@@ -204,7 +206,7 @@ class GitPulse(callbacks.Plugin):
 
         # Update stored ETag for next request
         if etag_received:
-            self.etags[repo] = etag_received
+            self.etags[f"{repo}::events"] = etag_received
 
         # Try parsing JSON response
         try:
@@ -255,20 +257,68 @@ class GitPulse(callbacks.Plugin):
         if token:
             headers['Authorization'] = f'token {token}'
 
+        etag_sent = self.etags.get(f"{repo}::commits")
+        if etag_sent:
+            headers['If-None-Match'] = etag_sent
+
         url = f"https://api.github.com/repos/{repo}/commits"
         try:
             resp = requests.get(url, headers=headers)
-            if resp.status_code != 200:
-                self.log_error(f"Failed to fetch commits for {repo}: HTTP {resp.status_code}")
-                return
+        except Exception as e:
+            self.log_error(f"HTTP request failed for commits of {repo}: {e}")
+            return
+
+        etag_received = resp.headers.get('ETag')
+
+        rate_limit = resp.headers.get('X-RateLimit-Limit')
+        rate_remaining = resp.headers.get('X-RateLimit-Remaining')
+        rate_used = resp.headers.get('X-RateLimit-Used')
+        rate_reset = resp.headers.get('X-RateLimit-Reset')
+
+        reset_time_str = "unknown"
+        try:
+            if rate_reset:
+                reset_time_str = datetime.utcfromtimestamp(int(rate_reset)).isoformat()
+        except Exception as e:
+            self.log_warning(f"Could not parse commit rate reset time: {e}")
+
+        repo_c = Fore.CYAN + repo + Style.RESET_ALL
+        rate_used_c = Fore.MAGENTA + (rate_used if rate_used else "N/A") + Style.RESET_ALL
+        rate_remaining_c = Fore.GREEN + (rate_remaining if rate_remaining else "N/A") + Style.RESET_ALL
+        rate_limit_c = Fore.YELLOW + (rate_limit if rate_limit else "N/A") + Style.RESET_ALL
+        etag_sent_c = Fore.BLUE + (etag_sent if etag_sent else "None") + Style.RESET_ALL
+        etag_received_c = Fore.BLUE + (etag_received if etag_received else "None") + Style.RESET_ALL
+        reset_time_c = Fore.CYAN + reset_time_str + Style.RESET_ALL
+
+        self.log_info(
+            f"Repo: {repo_c} | Commits API Status: {resp.status_code} | "
+            f"Rate: Used {rate_used_c}, Remaining {rate_remaining_c}/{rate_limit_c} | "
+            f"Resets at {reset_time_c} UTC | "
+            f"ETag sent: {etag_sent_c} | ETag received: {etag_received_c}"
+        )
+
+        if rate_remaining is not None and int(rate_remaining) < 100:
+            self.log_warning(f"Rate limit nearly exhausted ({rate_remaining} remaining). Skipping commits fetch for {repo_c}. Resets at {reset_time_c} UTC")
+            return
+
+        if resp.status_code == 304:
+            self.log_info(f"No new commits (304 Not Modified) for {repo_c}")
+            return
+
+        if resp.status_code != 200:
+            self.log_error(f"Failed to fetch commits for {repo_c}: HTTP {resp.status_code}")
+            return
+
+        if etag_received:
+            self.etags[f"{repo}::commits"] = etag_received
+
+        try:
             commits = resp.json()
         except Exception as e:
-            self.log_error(f"Error fetching commits: {e}")
+            self.log_error(f"Failed to parse commits JSON: {e}")
             return
 
         now = datetime.now(timezone.utc)
-
-        # # Ignore events older than 1 hour
         cutoff = now - timedelta(hours=1)
 
         for commit in reversed(commits):

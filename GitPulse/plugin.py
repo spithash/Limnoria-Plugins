@@ -39,7 +39,7 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 class GitPulse(callbacks.Plugin):
-    """Plugin that monitors GitHub repositories for activity using the GitHub Events & Commits API. Available commands are 'subscribe', 'unsubscribe', 'listgitpulse' and 'fetchgitpulse'"""
+    """Plugin that monitors public GitHub repositories for activity using the GitHub Events & Commits API. Available commands are 'subscribe', 'unsubscribe', 'listgitpulse' and 'fetchgitpulse'"""
 
     def __init__(self, irc):
         super().__init__(irc)

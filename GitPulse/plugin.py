@@ -447,6 +447,7 @@ class GitPulse(callbacks.Plugin):
         else:
             irc.reply(f"[GitPulse] No repositories subscribed to in {channel}.")
 
+    # This trigger command is owners only.
     @wrap(['owner'])
     def fetchgitpulse(self, irc, msg, args):
         """Manually trigger fetching GitHub events for all repos subscribed in the channel."""

@@ -218,7 +218,7 @@ class GitPulse(callbacks.Plugin):
         self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
         now = datetime.now(timezone.utc)
-        # Ignore events older than 12 hours
+        # Ignore events older than 12 hours. We keep this time history high because the events API sometimes is missing events.
         cutoff = now - timedelta(hours=12)
 
         # Process events in reverse order (oldest first)

@@ -390,6 +390,7 @@ class GitPulse(callbacks.Plugin):
             return
         for line in message.split('\n'):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
+            # TODO: The line below may be redundant 
             self.log_info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):

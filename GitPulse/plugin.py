@@ -48,6 +48,7 @@ class GitPulse(callbacks.Plugin):
         self.polling_thread = None
         self.stop_polling_event = Event()  # Used to signal polling thread to stop
         self.etags = {}  # Store ETag headers per repo to optimize GitHub API usage
+        self.last_modifieds = {}  # Store Last-Modified headers as fallback when no ETag
 
         # Styles for coloring logs
         self.TAG = Style.BRIGHT + Fore.WHITE + "[GitPulse]" + Style.RESET_ALL
@@ -137,17 +138,21 @@ class GitPulse(callbacks.Plugin):
             self.stop_polling_event.wait(interval)
 
     def fetch_and_announce(self, repo, irc, msg, channel):
-        """Fetch latest events for a given repo and announce new ones to the IRC channel."""
         self.log_debug(f"Fetching events for repository: {repo}")
         token = self.registryValue('githubToken')
         headers = {'Cache-Control': 'no-cache'}
         if token:
             headers['Authorization'] = f'token {token}'
 
-        # Send ETag to use conditional requests and reduce API rate limit usage
+        # Use ETag if available
         etag_sent = self.etags.get(f"{channel}::{repo}::events")
         if etag_sent:
             headers['If-None-Match'] = etag_sent
+        else:
+            # Fallback to Last-Modified if no ETag
+            last_modified_sent = self.last_modifieds.get(f"{channel}::{repo}::events")
+            if last_modified_sent:
+                headers['If-Modified-Since'] = last_modified_sent
 
         url = f"https://api.github.com/repos/{repo}/events"
         try:
@@ -157,8 +162,8 @@ class GitPulse(callbacks.Plugin):
             return
 
         etag_received = resp.headers.get('ETag')
+        last_modified_received = resp.headers.get('Last-Modified')
 
-        # Extract rate limit headers for logging and safety checks
         rate_limit = resp.headers.get('X-RateLimit-Limit')
         rate_remaining = resp.headers.get('X-RateLimit-Remaining')
         rate_used = resp.headers.get('X-RateLimit-Used')
@@ -171,7 +176,6 @@ class GitPulse(callbacks.Plugin):
         except Exception as e:
             self.log_warning(f"Could not parse rate reset time: {e}")
 
-        # Add color to key values for easy reading in logs
         repo_c = Fore.CYAN + repo + Style.RESET_ALL
         rate_used_c = Fore.MAGENTA + (rate_used if rate_used else "N/A") + Style.RESET_ALL
         rate_remaining_c = Fore.GREEN + (rate_remaining if rate_remaining else "N/A") + Style.RESET_ALL
@@ -187,28 +191,25 @@ class GitPulse(callbacks.Plugin):
             f"ETag sent: {etag_sent_c} | ETag received: {etag_received_c}"
         )
 
-        # Avoid making calls if close to exhausting rate limit
         if rate_remaining is not None and int(rate_remaining) < 100:
             self.log_warning(f"Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch for {repo_c}. Resets at {reset_time_c} UTC")
             return
 
-        # If content not modified since last poll, no need to parse further
         if resp.status_code == 304:
             self.log_info(f"No new data (304 Not Modified) for {repo_c}")
-            # Still fetch and announce commits even if /events is not modified
             self.fetch_and_announce_commits(repo, irc, msg, channel)
             return
 
-        # Log an error if request failed
         if resp.status_code != 200:
             self.log_error(f"Failed to fetch events for {repo_c}: HTTP {resp.status_code}")
             return
 
-        # Update stored ETag for next request
+        # Save ETag and Last-Modified if provided
         if etag_received:
             self.etags[f"{channel}::{repo}::events"] = etag_received
+        if last_modified_received:
+            self.last_modifieds[f"{channel}::{repo}::events"] = last_modified_received
 
-        # Try parsing JSON response
         try:
             events = resp.json()
         except Exception as e:
@@ -218,10 +219,8 @@ class GitPulse(callbacks.Plugin):
         self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
         now = datetime.now(timezone.utc)
-        # Ignore events older than 6 hours. We keep this time history high because the events API sometimes is missing events.
         cutoff = now - timedelta(hours=6)
 
-        # Process events in reverse order (oldest first)
         for event in reversed(events):
             try:
                 event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
@@ -230,10 +229,8 @@ class GitPulse(callbacks.Plugin):
                 continue
 
             if event_timestamp < cutoff:
-                # Skip older events
                 continue
 
-            # Only announce certain event types for now
             if event['type'] == 'PullRequestEvent':
                 msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
@@ -246,11 +243,10 @@ class GitPulse(callbacks.Plugin):
                     self.log_info(f"Posting IssuesEvent: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
 
-        # Fetch and announce commits separately from the commits API
         self.fetch_and_announce_commits(repo, irc, msg, channel)
 
+
     def fetch_and_announce_commits(self, repo, irc, msg, channel):
-        """Fetch latest commits separately from the GitHub commits API and announce."""
         self.log_debug(f"Fetching commits for repository: {repo}")
         token = self.registryValue('githubToken')
         headers = {'Cache-Control': 'no-cache'}
@@ -260,6 +256,10 @@ class GitPulse(callbacks.Plugin):
         etag_sent = self.etags.get(f"{channel}::{repo}::commits")
         if etag_sent:
             headers['If-None-Match'] = etag_sent
+        else:
+            last_modified_sent = self.last_modifieds.get(f"{channel}::{repo}::commits")
+            if last_modified_sent:
+                headers['If-Modified-Since'] = last_modified_sent
 
         url = f"https://api.github.com/repos/{repo}/commits"
         try:
@@ -269,6 +269,7 @@ class GitPulse(callbacks.Plugin):
             return
 
         etag_received = resp.headers.get('ETag')
+        last_modified_received = resp.headers.get('Last-Modified')
 
         rate_limit = resp.headers.get('X-RateLimit-Limit')
         rate_remaining = resp.headers.get('X-RateLimit-Remaining')
@@ -311,6 +312,8 @@ class GitPulse(callbacks.Plugin):
 
         if etag_received:
             self.etags[f"{channel}::{repo}::commits"] = etag_received
+        if last_modified_received:
+            self.last_modifieds[f"{channel}::{repo}::commits"] = last_modified_received
 
         try:
             commits = resp.json()

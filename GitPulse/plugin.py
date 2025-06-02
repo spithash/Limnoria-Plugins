@@ -219,7 +219,7 @@ class GitPulse(callbacks.Plugin):
 
         now = datetime.now(timezone.utc)
         # Ignore events older than 12 hours. We keep this time history high because the events API sometimes is missing events.
-        cutoff = now - timedelta(hours=12)
+        cutoff = now - timedelta(hours=6)
 
         # Process events in reverse order (oldest first)
         for event in reversed(events):

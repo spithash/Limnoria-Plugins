@@ -219,7 +219,7 @@ class GitPulse(callbacks.Plugin):
         self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=6)
+        cutoff = now - timedelta(minutes=6)
 
         for event in reversed(events):
             try:

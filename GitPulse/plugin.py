@@ -322,7 +322,7 @@ class GitPulse(callbacks.Plugin):
             return
 
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(minutes=6)
+        cutoff = now - timedelta(minutes=7)
 
         for commit in reversed(commits):
             try:

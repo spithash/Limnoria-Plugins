@@ -64,12 +64,22 @@ class Etymology(callbacks.Plugin):
                         bold_text = b.get_text(strip=True)
                         b.string = f"\x02{bold_text}\x02"
 
+                    # Wrap italics inside rtseg with IRC grey color \x0314...\x0F
+                    for i_tag in rtseg_div.find_all(['i', 'em']):
+                        italics_text = i_tag.get_text(strip=True)
+                        i_tag.string = f"\x0314{italics_text}\x0F"
+
                     rt_text = rtseg_div.get_text(" ", strip=True)
 
                     # Wrap bold text inside etyseg with IRC bold \x02
                     for b in etyseg_div.find_all('b'):
                         bold_text = b.get_text(strip=True)
                         b.string = f"\x02{bold_text}\x02"
+
+                    # Wrap italics inside etyseg with IRC grey color \x0314...\x0F
+                    for i_tag in etyseg_div.find_all(['i', 'em']):
+                        italics_text = i_tag.get_text(strip=True)
+                        i_tag.string = f"\x0314{italics_text}\x0F"
 
                     ety_text = etyseg_div.get_text(" ", strip=True)
 

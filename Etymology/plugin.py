@@ -52,39 +52,68 @@ class Etymology(callbacks.Plugin):
 
             for td in soup.find_all('td'):
                 rtseg_div = td.find('div', class_='rtseg')
+                pseg_div = td.find('div', class_='pseg')
                 etyseg_div = td.find('div', class_='etyseg')
+                runseg_div = td.find('div', class_='runseg')
+                syntx_div = td.find('div', class_='syntx')
 
                 if rtseg_div and etyseg_div:
-                    # Remove any strings containing "Share" or "Tweet"
+                    # Remove "Share" and "Tweet"
                     for share in rtseg_div.find_all(string=lambda s: "Share" in s or "Tweet" in s):
                         share.extract()
 
-                    # Wrap bold text inside rtseg with IRC bold \x02
+                    # Format bold and italics in rtseg
                     for b in rtseg_div.find_all('b'):
-                        bold_text = b.get_text(strip=True)
-                        b.string = f"\x02{bold_text}\x02"
-
-                    # Wrap italics inside rtseg with IRC grey color \x0314...\x0F
+                        b.string = f"\x02{b.get_text(strip=True)}\x02"
                     for i_tag in rtseg_div.find_all(['i', 'em']):
-                        italics_text = i_tag.get_text(strip=True)
-                        i_tag.string = f"\x0314{italics_text}\x0F"
-
+                        i_tag.string = f"\x0314{i_tag.get_text(strip=True)}\x0F"
                     rt_text = rtseg_div.get_text(" ", strip=True)
 
-                    # Wrap bold text inside etyseg with IRC bold \x02
+                    # Add pseg if available
+                    if pseg_div:
+                        for b in pseg_div.find_all('b'):
+                            b.string = f"\x02{b.get_text(strip=True)}\x02"
+                        for i_tag in pseg_div.find_all(['i', 'em']):
+                            i_tag.string = f"\x0314{i_tag.get_text(strip=True)}\x0F"
+                        pseg_text = pseg_div.get_text(" ", strip=True)
+                        rt_text = f"{rt_text} {pseg_text}"
+
+                    # Format etyseg
                     for b in etyseg_div.find_all('b'):
-                        bold_text = b.get_text(strip=True)
-                        b.string = f"\x02{bold_text}\x02"
-
-                    # Wrap italics inside etyseg with IRC grey color \x0314...\x0F
+                        b.string = f"\x02{b.get_text(strip=True)}\x02"
                     for i_tag in etyseg_div.find_all(['i', 'em']):
-                        italics_text = i_tag.get_text(strip=True)
-                        i_tag.string = f"\x0314{italics_text}\x0F"
-
+                        i_tag.string = f"\x0314{i_tag.get_text(strip=True)}\x0F"
                     ety_text = etyseg_div.get_text(" ", strip=True)
+                    ety_text = unescape(ety_text).strip()
+                    if ety_text.startswith('[') and ety_text.endswith(']'):
+                        ety_text = ety_text[1:-1].strip()
 
-                    entry = f"{rt_text} :: {unescape(ety_text)}"
-                    entries.append(entry)
+                    # Format runseg if available
+                    run_text = ""
+                    if runseg_div:
+                        for b in runseg_div.find_all('b'):
+                            b.string = f"\x02{b.get_text(strip=True)}\x02"
+                        for i_tag in runseg_div.find_all(['i', 'em']):
+                            i_tag.string = f"\x0314{i_tag.get_text(strip=True)}\x0F"
+                        run_text = runseg_div.get_text(" ", strip=True)
+
+                    # Format syntx if available
+                    syntx_text = ""
+                    if syntx_div:
+                        for b in syntx_div.find_all('b'):
+                            b.string = f"\x02{b.get_text(strip=True)}\x02"
+                        for i_tag in syntx_div.find_all(['i', 'em']):
+                            i_tag.string = f"\x0314{i_tag.get_text(strip=True)}\x0F"
+                        syntx_text = syntx_div.get_text(" ", strip=True)
+
+                    # Combine everything
+                    full_entry = f"{rt_text} :: {ety_text}"
+                    if run_text:
+                        full_entry += f" {run_text}"
+                    if syntx_text:
+                        full_entry += f" {syntx_text}"
+
+                    entries.append(full_entry)
 
             if entries:
                 for entry in entries:

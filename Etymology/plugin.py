@@ -44,7 +44,7 @@ class Etymology(callbacks.Plugin):
         """
         try:
             url = f"https://www.ahdictionary.com/word/search.html?q={utils.web.urlquote(word)}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0'}
             response = requests.get(url, headers=headers)
             soup = BeautifulSoup(response.content, 'html.parser')
 

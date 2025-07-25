@@ -4,3 +4,4 @@
 4. Greets users who send messages with specific keywords (A friendly bot that responds to greetings) --> [WaveBack](https://github.com/spithash/Limnoria-Plugins/tree/main/WaveBack)
 5. Subscribe to Github repos and output activity in the channel --> [GitPulse](https://github.com/spithash/Limnoria-Plugins/tree/main/GitPulse)
 6. Fetches etymology of a word from ahdictionary.com --> [Etymology](https://github.com/spithash/Limnoria-Plugins/tree/main/Etymology)
+7. Displays channel statistics as text-based graphs using ChannelLogger logs. Respects ignores from conf/ignores.conf so ignored users aren’t counted. --> [GraphStats](https://github.com/spithash/Limnoria-Plugins/tree/main/GraphStats)

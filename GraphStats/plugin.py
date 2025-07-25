@@ -36,12 +36,18 @@ from pathlib import Path
 from collections import Counter
 import datetime
 import re
+import time
 
 _ = PluginInternationalization('GraphStats')
 
 
 class GraphStats(callbacks.Plugin):
     """Displays channel statistics as text-based graphs using ChannelLogger logs."""
+
+    def __init__(self, irc):
+        super().__init__(irc)
+        # Track last usage per (channel, timeframe) to apply cooldowns independently
+        self.last_use = {}
 
     def _parse_logs(self, log_files, exclude_nick):
         counts = Counter()
@@ -137,8 +143,7 @@ class GraphStats(callbacks.Plugin):
         """
         Display channel message statistics from ChannelLogger logs.
 
-        Optionally specify a timeframe: 'graphstats', 'graphstats monthly', or 'graphstats yearly'.
-        Defaults to daily if no timeframe is given.
+        Optionally specify a timeframe: 'daily' (default), 'monthly', or 'yearly'.
         """
         if timeframe is None:
             timeframe = 'daily'
@@ -151,7 +156,17 @@ class GraphStats(callbacks.Plugin):
         channel = msg.args[0]
         network = irc.network.lower()
 
-        # Logs should be in logs/limnoria/ChannelLogger/<network>/<channel>/
+        cooldown = 600  # 5 minutes cooldown in seconds
+        now = time.time()
+        key = (channel, timeframe)
+
+        # Check cooldown for this specific channel+timeframe combo
+        if key in self.last_use and (now - self.last_use[key]) < cooldown:
+            wait = int(cooldown - (now - self.last_use[key]))
+            irc.reply(f"You can use this command ({timeframe}) only once every 10 minutes. Wait {wait} more second(s).", prefixNick=True)
+            return
+
+        # Path to logs folder
         base_path = Path(os.getcwd()) / 'logs' / 'limnoria' / 'ChannelLogger'
         log_files = self._get_log_files(base_path, network, channel, timeframe)
 
@@ -164,9 +179,11 @@ class GraphStats(callbacks.Plugin):
 
         reply = self._format_stats(counts, timeframe)
 
-        # Send each line as a separate IRC message (better formatting)
         for line in reply.split('\n'):
             irc.reply(line)
+
+        # Update last use time for this (channel, timeframe)
+        self.last_use[key] = now
 
     graphstats = wrap(graphstats, [optional('something')])
 

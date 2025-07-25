@@ -48,8 +48,6 @@ class Etymology(callbacks.Plugin):
             response = requests.get(url, headers=headers)
             soup = BeautifulSoup(response.content, 'html.parser')
 
-            entries = []
-
             for td in soup.find_all('td'):
                 rtseg_div = td.find('div', class_='rtseg')
                 pseg_div = td.find('div', class_='pseg')
@@ -113,13 +111,10 @@ class Etymology(callbacks.Plugin):
                     if syntx_text:
                         full_entry += f" {syntx_text}"
 
-                    entries.append(full_entry)
+                    irc.reply(full_entry)
+                    return  # ✅ Stop after the first valid result
 
-            if entries:
-                for entry in entries:
-                    irc.reply(entry)
-            else:
-                irc.reply("No etymology information found.")
+            irc.reply("No etymology information found.")
 
         except Exception as e:
             irc.reply(f"Error fetching etymology: {e}")

@@ -137,7 +137,7 @@ class GraphStats(callbacks.Plugin):
         """
         Display channel message statistics from ChannelLogger logs.
 
-        Optionally specify a timeframe: daily, monthly, or yearly.
+        Optionally specify a timeframe: 'graphstats' (default: daily), 'graphstats monthly', or 'graphstats yearly'.
         Defaults to daily if no timeframe is given.
         """
         if timeframe is None:

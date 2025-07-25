@@ -112,7 +112,7 @@ class Etymology(callbacks.Plugin):
                         full_entry += f" {syntx_text}"
 
                     irc.reply(full_entry)
-                    return  # ✅ Stop after the first valid result
+                    return  # Stop after the first valid result
 
             irc.reply("No etymology information found.")
 

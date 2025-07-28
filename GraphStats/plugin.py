@@ -46,7 +46,6 @@ class GraphStats(callbacks.Plugin):
 
     def __init__(self, irc):
         super().__init__(irc)
-        # Track last usage per (channel, timeframe) to apply cooldowns independently
         self.last_use = {}
 
     def _parse_logs(self, log_files, exclude_nick):
@@ -73,13 +72,11 @@ class GraphStats(callbacks.Plugin):
                             nick_lc = nick.lower()
                             counts[nick_lc] += 1
 
-                            # Save the first-seen display variant (preserve capitalization)
                             if nick_lc not in display_names:
                                 display_names[nick_lc] = nick
             except Exception:
                 pass  # quietly ignore bad files or decoding issues
 
-        # Convert lowercase-counts back to display names
         final_counts = Counter()
         for nick_lc, count in counts.items():
             final_counts[display_names[nick_lc]] = count
@@ -89,7 +86,7 @@ class GraphStats(callbacks.Plugin):
         if max_count == 0:
             return ''
         bar_len = int((count / max_count) * width)
-        return '━' * bar_len  # Sleek, thin and readable graph character
+        return '━' * bar_len
 
     def _get_log_files(self, base_path, network, channel, timeframe):
         channel_path = base_path / network / channel
@@ -99,9 +96,11 @@ class GraphStats(callbacks.Plugin):
         log_files = []
         today = datetime.date.today()
 
-        # Rolling 12-month window
         if timeframe == 'yearly':
             cutoff = today - datetime.timedelta(days=365)
+        elif timeframe == 'weekly':
+            cutoff = today - datetime.timedelta(days=7)
+
         for f in channel_path.iterdir():
             if f.is_file() and f.name.startswith(channel):
                 try:
@@ -112,6 +111,9 @@ class GraphStats(callbacks.Plugin):
 
                 if timeframe == 'daily':
                     if dt == today:
+                        log_files.append(f)
+                elif timeframe == 'weekly':
+                    if dt >= cutoff:
                         log_files.append(f)
                 elif timeframe == 'monthly':
                     if dt.year == today.year and dt.month == today.month:
@@ -127,7 +129,6 @@ class GraphStats(callbacks.Plugin):
         if not counts:
             return "No messages found for this timeframe."
 
-        # Title line with color and bold
         title = f"📊 \x02\x0310Top Chatters ({timeframe.title()}, by number of lines):\x0F"
         max_nick_len = max(len(nick) for nick in counts)
         max_count = max(counts.values())
@@ -143,12 +144,12 @@ class GraphStats(callbacks.Plugin):
         """
         Display channel message statistics from ChannelLogger logs.
 
-        Optionally specify a timeframe: 'daily' (default), 'monthly', or 'yearly'.
+        Optionally specify a timeframe: 'daily' (default), 'weekly', 'monthly', or 'yearly'.
         """
         if timeframe is None:
             timeframe = 'daily'
         timeframe = timeframe.lower()
-        valid_timeframes = ('daily', 'monthly', 'yearly')
+        valid_timeframes = ('daily', 'weekly', 'monthly', 'yearly')
         if timeframe not in valid_timeframes:
             irc.reply(f"Invalid timeframe '{timeframe}'. Use one of {valid_timeframes}.")
             return
@@ -156,17 +157,15 @@ class GraphStats(callbacks.Plugin):
         channel = msg.args[0]
         network = irc.network.lower()
 
-        cooldown = 600  # 5 minutes cooldown in seconds
+        cooldown = 600  # 10 minutes cooldown
         now = time.time()
         key = (channel, timeframe)
 
-        # Check cooldown for this specific channel+timeframe combo
         if key in self.last_use and (now - self.last_use[key]) < cooldown:
             wait = int(cooldown - (now - self.last_use[key]))
             irc.reply(f"You can use this command ({timeframe}) only once every 10 minutes. Wait {wait} more second(s).", prefixNick=True)
             return
 
-        # Path to logs folder
         base_path = Path(os.getcwd()) / 'logs' / 'limnoria' / 'ChannelLogger'
         log_files = self._get_log_files(base_path, network, channel, timeframe)
 
@@ -176,13 +175,11 @@ class GraphStats(callbacks.Plugin):
 
         bot_nick = irc.nick
         counts = self._parse_logs(log_files, bot_nick)
-
         reply = self._format_stats(counts, timeframe)
 
         for line in reply.split('\n'):
             irc.reply(line)
 
-        # Update last use time for this (channel, timeframe)
         self.last_use[key] = now
 
     graphstats = wrap(graphstats, [optional('something')])

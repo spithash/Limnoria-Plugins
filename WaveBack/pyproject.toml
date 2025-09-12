@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "limnoria-waveback"
+version = "0.0.0"
+authors = [
+    { name = "spithash@Libera" },
+]
+readme = "README.md"
+dependencies = [
+    "limnoria",
+]
+classifiers = [
+    'Environment :: Plugins',
+    'Programming Language :: Python :: 3',
+    'Topic :: Communications :: Chat',
+]
+
+[project.entry-points.'limnoria.plugins']
+WaveBack = "limnoria_waveback"
+
+[tool.setuptools.package-dir]
+"limnoria_waveback" = "."
+
+[tool.setuptools.package-data]
+"limnoria_waveback" = ["locales/*.po"]

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "limnoria-tldr"
+version = "0.0.0"
+authors = [
+    { name = "Stathis Xantinidis @spithash" },
+]
+readme = "README.md"
+dependencies = [
+    "limnoria",
+]
+classifiers = [
+    'Environment :: Plugins',
+    'Programming Language :: Python :: 3',
+    'Topic :: Communications :: Chat',
+]
+
+[project.entry-points.'limnoria.plugins']
+TLDR = "limnoria_tldr"
+
+[tool.setuptools.package-dir]
+"limnoria_tldr" = "."
+
+[tool.setuptools.package-data]
+"limnoria_tldr" = ["locales/*.po"]

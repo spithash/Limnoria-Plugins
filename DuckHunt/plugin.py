@@ -1,5 +1,6 @@
 # Copyright (c) 2012, Matthias Meusburger
 # Copyright (c) 2020, oddluck <oddluck@riseup.net>
+# Modifications 2025: integrated befriending fully, autosave, huntscore, totals, etc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -44,8 +45,7 @@ class DuckHunt(callbacks.Plugin):
     """
     A DuckHunt game for supybot. Use the "starthunt" command to start a game.
     The bot will randomly launch ducks. Whenever a duck is launched, the first
-    person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks. Using the "bang" and the "bef" command
-    when there is no duck launched costs a point.
+    person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks.
     """
 
     threaded = True
@@ -53,20 +53,20 @@ class DuckHunt(callbacks.Plugin):
     # Those parameters are per-channel parameters
     started = {}  # Has the hunt started?
     duck = {}  # Is there currently a duck to shoot?
-    shoots = {}  # Number of successfull shoots in a hunt
-    scores = {}  # Scores for the current hunt
-    times = {}  # Elapsed time since the last duck was launched
-    channelscores = {}  # Saved scores for the channel
-    toptimes = {}  # Times for the current hunt
-    channeltimes = {}  # Saved times for the channel
+    shoots = {}  # Number of successful shoots in a hunt
+    scores = {}  # Scores for the current hunt (shooting)
+    times = {}  # Elapsed time since the last duck was launched (for bang)
+    channelscores = {}  # Saved scores for the channel (persistent)
+    toptimes = {}  # Times for the current hunt (best times)
+    channeltimes = {}  # Saved times for the channel (persistent)
     worsttimes = {}  # Worst times for the current hunt
-    channelworsttimes = {}  # Saved worst times for the channel
+    channelworsttimes = {}  # Saved worst times for the channel (persistent)
     averagetime = {}  # Average shooting time for the current hunt
     fridayMode = {}  # Are we on friday mode? (automatic)
     manualFriday = {}  # Are we on friday mode? (manual)
     missprobability = {}  # Probability to miss a duck when shooting
-    week = {}  # Scores for the week
-    channelweek = {}  # Saved scores for the week
+    week = {}  # Scores for the week (in-memory)
+    channelweek = {}  # Saved scores for the week (persistent)
     leader = {}  # Who is the leader for the week?
     reloading = {}  # Who is currently reloading?
     reloadtime = {}  # Time to reload after shooting (in seconds)
@@ -75,6 +75,9 @@ class DuckHunt(callbacks.Plugin):
     # New: befriending stats
     friends = {}  # current hunt friendship counts (per-channel)
     channelfriends = {}  # saved friendship totals per channel (persistent)
+
+    # Enable autosave so progress is flushed to disk immediately (protect against crashes)
+    autosave = True  # Set to False to keep old behavior (accumulate only at end-of-hunt)
 
     # Does a duck needs to be launched?
     lastSpoke = {}
@@ -90,9 +93,7 @@ class DuckHunt(callbacks.Plugin):
     debug = 0
 
     # Other params
-    perfectbonus = (
-        5  # How many extra-points are given when someones does a perfect hunt?
-    )
+    perfectbonus = 5  # How many extra-points are given when someone does a perfect hunt?
     toplist = 15  # How many high{scores|times} are displayed by default?
     dow = int(time.strftime("%u"))  # Day of week
     woy = int(time.strftime("%V"))  # Week of year
@@ -107,80 +108,48 @@ class DuckHunt(callbacks.Plugin):
         "Sunday",
     ]
 
+    # ---------------------------
+    # Data persistence utilities
+    # ---------------------------
+    def _ensure_channel_files_exist(self, channel):
+        """
+        Ensure the persistent dictionaries exist (after reading).
+        """
+        if channel not in self.channelscores:
+            self.channelscores[channel] = {}
+        if channel not in self.channeltimes:
+            self.channeltimes[channel] = {}
+        if channel not in self.channelworsttimes:
+            self.channelworsttimes[channel] = {}
+        if channel not in self.channelweek:
+            self.channelweek[channel] = {}
+        if channel not in self.channelfriends:
+            self.channelfriends[channel] = {}
+
     def _calc_scores(self, channel):
         """
-        Adds new scores and times to the already saved ones
+        Adds new scores and times to the already saved ones.
+
+        If autosave is enabled, scores and friendships are already persistent,
+        so we skip re-adding them to avoid double-counting.
+        We still handle times and week merging.
         """
-
-        # scores
-        # Adding current scores to the channel scores
-        for player, value in self.scores[channel].items():
-            if not player in self.channelscores[channel]:
-                # It's a new player
-                self.channelscores[channel][player] = value
-            else:
-                # It's a player that already has a saved score
-                self.channelscores[channel][player] += value
-
-        # times
-        # Adding times scores to the channel scores
-        for player, value in self.toptimes[channel].items():
-            if not player in self.channeltimes[channel]:
-                # It's a new player
-                self.channeltimes[channel][player] = value
-            else:
-                # It's a player that already has a saved score
-                # And we save the time of the current hunt if it's better than it's previous time
-                if self.toptimes[channel][player] < self.channeltimes[channel][player]:
-                    self.channeltimes[channel][player] = self.toptimes[channel][player]
-
-        # worst times
-        # Adding worst times scores to the channel scores
-        for player, value in self.worsttimes[channel].items():
-            if not player in self.channelworsttimes[channel]:
-                # It's a new player
-                self.channelworsttimes[channel][player] = value
-            else:
-                # It's a player that already has a saved score
-                # And we save the time of the current hunt if it's worst than it's previous time
-                if self.worsttimes[channel][player] > value:
-                    self.channelworsttimes[channel][player] = value
-
-        # week scores
-        for player, value in self.scores[channel].items():
-            # Ensure that the channel exists
-            if channel not in self.channelweek:
-                self.channelweek[channel] = {}
-
-            # Ensure that the week of year (self.woy) exists for the channel
-            if self.woy not in self.channelweek[channel]:
-                self.channelweek[channel][self.woy] = {}
-
-            # Ensure that the day of week (self.dow) exists for the week
-            if self.dow not in self.channelweek[channel][self.woy]:
-                self.channelweek[channel][self.woy][self.dow] = {}
-
-            # Now it's safe to check for the player
-            if player not in self.channelweek[channel][self.woy][self.dow]:
-                # It's a new player
-                self.channelweek[channel][self.woy][self.dow][player] = value
-            else:
-                # It's a player that already has a saved score
-                self.channelweek[channel][self.woy][self.dow][player] += value
-
-        # --- SAFER best-time handling: ensure new players' best times are recorded ---
-        # This protects against the case where channeltimes doesn't have the player yet.
+        # Ensure persistent dicts exist
         try:
-            for player, val in self.toptimes.get(channel, {}).items():
-                if (player not in self.channeltimes[channel]) or (
-                    val < self.channeltimes[channel][player]
-                ):
-                    self.channeltimes[channel][player] = val
+            self._read_scores(channel)
         except Exception:
             pass
 
-        # --- FRIENDSHIPS accumulation (new feature) ---
-        try:
+        # If autosave is OFF, we need to aggregate current hunt scores into persistent totals.
+        if not self.autosave:
+            # scores
+            for player, value in self.scores.get(channel, {}).items():
+                if player not in self.channelscores[channel]:
+                    self.channelscores[channel][player] = value
+                else:
+                    self.channelscores[channel][player] += value
+
+            # friendships
             if channel not in self.channelfriends:
                 self.channelfriends[channel] = {}
             for player, val in self.friends.get(channel, {}).items():
@@ -188,46 +157,74 @@ class DuckHunt(callbacks.Plugin):
                     self.channelfriends[channel][player] = val
                 else:
                     self.channelfriends[channel][player] += val
-        except Exception:
-            pass
+
+        # times (best)
+        for player, value in self.toptimes.get(channel, {}).items():
+            if player not in self.channeltimes[channel]:
+                self.channeltimes[channel][player] = value
+            else:
+                # Keep minimum (best) time
+                if value < self.channeltimes[channel][player]:
+                    self.channeltimes[channel][player] = value
+
+        # worst times (keep maximum)
+        for player, value in self.worsttimes.get(channel, {}).items():
+            if player not in self.channelworsttimes[channel]:
+                self.channelworsttimes[channel][player] = value
+            else:
+                if value > self.channelworsttimes[channel][player]:
+                    self.channelworsttimes[channel][player] = value
+
+        # week scores: always add current hunt scores to week summary.
+        for player, value in self.scores.get(channel, {}).items():
+            if channel not in self.channelweek:
+                self.channelweek[channel] = {}
+            if self.woy not in self.channelweek[channel]:
+                self.channelweek[channel][self.woy] = {}
+            if self.dow not in self.channelweek[channel][self.woy]:
+                self.channelweek[channel][self.woy][self.dow] = {}
+            if player not in self.channelweek[channel][self.woy][self.dow]:
+                self.channelweek[channel][self.woy][self.dow][player] = value
+            else:
+                self.channelweek[channel][self.woy][self.dow][player] += value
 
     def _write_scores(self, channel):
         """
-        Write scores and times to the disk
+        Write persistent structures to disk. Robust to missing dicts.
         """
+        filename_base = self.path.dirize(self.fileprefix + channel)
 
-        # scores
-        outputfile = open(self.path.dirize(self.fileprefix + channel + ".scores"), "wb")
-        pickle.dump(self.channelscores[channel], outputfile)
-        outputfile.close()
+        # Ensure we have dicts to write
+        self._ensure_channel_files_exist(channel)
 
-        # times
-        outputfile = open(self.path.dirize(self.fileprefix + channel + ".times"), "wb")
-        pickle.dump(self.channeltimes[channel], outputfile)
-        outputfile.close()
-
-        # worst times
-        outputfile = open(
-            self.path.dirize(self.fileprefix + channel + ".worsttimes"), "wb"
-        )
-        pickle.dump(self.channelworsttimes[channel], outputfile)
-        outputfile.close()
-
-        # week scores
-        outputfile = open(
-            self.path.dirize(self.fileprefix + channel + self.year + ".weekscores"),
-            "wb",
-        )
-        pickle.dump(self.channelweek[channel], outputfile)
-        outputfile.close()
-
-        # friendships (new)
         try:
-            outputfile = open(self.path.dirize(self.fileprefix + channel + ".friends"), "wb")
-            pickle.dump(self.channelfriends[channel], outputfile)
-            outputfile.close()
+            with open(filename_base + ".scores", "wb") as outputfile:
+                pickle.dump(self.channelscores[channel], outputfile)
         except Exception:
-            # If channelfriends isn't initialized yet, ignore
+            pass
+
+        try:
+            with open(filename_base + ".times", "wb") as outputfile:
+                pickle.dump(self.channeltimes[channel], outputfile)
+        except Exception:
+            pass
+
+        try:
+            with open(filename_base + ".worsttimes", "wb") as outputfile:
+                pickle.dump(self.channelworsttimes[channel], outputfile)
+        except Exception:
+            pass
+
+        try:
+            with open(filename_base + self.year + ".weekscores", "wb") as outputfile:
+                pickle.dump(self.channelweek[channel], outputfile)
+        except Exception:
+            pass
+
+        try:
+            with open(filename_base + ".friends", "wb") as outputfile:
+                pickle.dump(self.channelfriends[channel], outputfile)
+        except Exception:
             pass
 
     def _read_scores(self, channel):
@@ -236,43 +233,63 @@ class DuckHunt(callbacks.Plugin):
         """
         filename = self.path.dirize(self.fileprefix + channel)
         # scores
-        if not self.channelscores.get(channel):
-            if os.path.isfile(filename + ".scores"):
-                inputfile = open(filename + ".scores", "rb")
-                self.channelscores[channel] = pickle.load(inputfile)
-                inputfile.close()
+        try:
+            if not self.channelscores.get(channel):
+                if os.path.isfile(filename + ".scores"):
+                    with open(filename + ".scores", "rb") as inputfile:
+                        self.channelscores[channel] = pickle.load(inputfile)
+                else:
+                    self.channelscores[channel] = {}
+        except Exception:
+            self.channelscores[channel] = {}
 
         # times
-        if not self.channeltimes.get(channel):
-            if os.path.isfile(filename + ".times"):
-                inputfile = open(filename + ".times", "rb")
-                self.channeltimes[channel] = pickle.load(inputfile)
-                inputfile.close()
+        try:
+            if not self.channeltimes.get(channel):
+                if os.path.isfile(filename + ".times"):
+                    with open(filename + ".times", "rb") as inputfile:
+                        self.channeltimes[channel] = pickle.load(inputfile)
+                else:
+                    self.channeltimes[channel] = {}
+        except Exception:
+            self.channeltimes[channel] = {}
 
         # worst times
-        if not self.channelworsttimes.get(channel):
-            if os.path.isfile(filename + ".worsttimes"):
-                inputfile = open(filename + ".worsttimes", "rb")
-                self.channelworsttimes[channel] = pickle.load(inputfile)
-                inputfile.close()
+        try:
+            if not self.channelworsttimes.get(channel):
+                if os.path.isfile(filename + ".worsttimes"):
+                    with open(filename + ".worsttimes", "rb") as inputfile:
+                        self.channelworsttimes[channel] = pickle.load(inputfile)
+                else:
+                    self.channelworsttimes[channel] = {}
+        except Exception:
+            self.channelworsttimes[channel] = {}
 
         # week scores
-        if not self.channelweek.get(channel):
-            if os.path.isfile(filename + self.year + ".weekscores"):
-                inputfile = open(filename + self.year + ".weekscores", "rb")
-                self.channelweek[channel] = pickle.load(inputfile)
-                inputfile.close()
+        try:
+            if not self.channelweek.get(channel):
+                if os.path.isfile(filename + self.year + ".weekscores"):
+                    with open(filename + self.year + ".weekscores", "rb") as inputfile:
+                        self.channelweek[channel] = pickle.load(inputfile)
+                else:
+                    self.channelweek[channel] = {}
+        except Exception:
+            self.channelweek[channel] = {}
 
-        # friendships (new)
-        if not self.channelfriends.get(channel):
-            if os.path.isfile(filename + ".friends"):
-                try:
-                    inputfile = open(filename + ".friends", "rb")
-                    self.channelfriends[channel] = pickle.load(inputfile)
-                    inputfile.close()
-                except Exception:
+        # friendships
+        try:
+            if not self.channelfriends.get(channel):
+                if os.path.isfile(filename + ".friends"):
+                    with open(filename + ".friends", "rb") as inputfile:
+                        self.channelfriends[channel] = pickle.load(inputfile)
+                else:
                     self.channelfriends[channel] = {}
+        except Exception:
+            self.channelfriends[channel] = {}
 
+    # ---------------------------
+    # Initialization helpers
+    # ---------------------------
     def _initdayweekyear(self, channel):
         self.dow = int(time.strftime("%u"))  # Day of week
         self.woy = int(time.strftime("%V"))  # Week of year
@@ -350,6 +367,9 @@ class DuckHunt(callbacks.Plugin):
             self.minthrottle[channel], self.maxthrottle[channel]
         )
 
+    # ---------------------------
+    # Game control
+    # ---------------------------
     def starthunt(self, irc, msg, args):
         """
         Starts the hunt
@@ -444,6 +464,7 @@ class DuckHunt(callbacks.Plugin):
                 try:
                     self.channelfriends[currentChannel]
                 except:
+                    # don't overwrite if it was loaded from disk
                     self.channelfriends[currentChannel] = {}
 
                 irc.reply("✔️ The hunt starts now! 🦆🦆🦆", prefixNick=False)
@@ -552,11 +573,14 @@ class DuckHunt(callbacks.Plugin):
 
     launched = wrap(launched)
 
+    # ---------------------------
+    # Score & listing commands
+    # ---------------------------
     def score(self, irc, msg, args, nick):
         """
         <nick>
 
-        Shows the score for a given nick
+        Shows the persistent score for a given nick (total ducks shot in this channel)
         """
         currentChannel = msg.args[0]
         if irc.isChannel(currentChannel):
@@ -569,11 +593,45 @@ class DuckHunt(callbacks.Plugin):
             try:
                 irc.reply(self.channelscores[currentChannel][nick])
             except:
-                irc.reply("There is no score for %s on %s" % (nick, currentChannel))
+                irc.reply("There is no persistent score for %s on %s" % (nick, currentChannel))
         else:
             irc.error("You have to be on a channel")
 
     score = wrap(score, ["nick"])
+
+    def huntscore(self, irc, msg, args, nick):
+        """
+        <nick>
+
+        Shows the CURRENT-HUNT scores for a given nick (both shooting and befriending).
+        Useful to check your live score during a hunt.
+        """
+        currentChannel = msg.args[0]
+        if irc.isChannel(currentChannel):
+            if not self.started.get(currentChannel):
+                irc.reply("❗ There is no hunt right now!")
+                return
+
+            # current in-memory scores
+            shoot = 0
+            bef = 0
+            try:
+                shoot = self.scores.get(currentChannel, {}).get(nick, 0)
+            except:
+                shoot = 0
+            try:
+                bef = self.friends.get(currentChannel, {}).get(nick, 0)
+            except:
+                bef = 0
+
+            irc.reply(
+                "%s — current hunt: shooting: %i | befriending: %i"
+                % (nick, shoot, bef)
+            )
+        else:
+            irc.error("You have to be on a channel")
+
+    huntscore = wrap(huntscore, ["nick"])
 
     def mergescores(self, irc, msg, args, channel, nickto, nickfrom):
         """
@@ -670,9 +728,12 @@ class DuckHunt(callbacks.Plugin):
         """
         if irc.isChannel(channel):
             self._read_scores(channel)
-            del self.channeltimes[channel][nick]
-            self._write_scores(channel)
-            irc.replySuccess()
+            try:
+                del self.channeltimes[channel][nick]
+                self._write_scores(channel)
+                irc.replySuccess()
+            except Exception:
+                irc.replyError()
 
         else:
             irc.error("Are you sure " + str(channel) + " is a channel?")
@@ -829,7 +890,7 @@ class DuckHunt(callbacks.Plugin):
     def listscores(self, irc, msg, args, size, channel):
         """
         [<size>] [<channel>]
-        Shows the <size>-sized score list for <channel> (or for the current channel if no channel is given)
+        Shows the <size>-sized persistent kill score list for <channel> and also shows persistent friendship top list.
         """
 
         if irc.isChannel(channel):
@@ -856,8 +917,6 @@ class DuckHunt(callbacks.Plugin):
 
             msgstring = ""
             for item in scores:
-                # Why do we show the nicks as xnickx?
-                # Just to prevent everyone that has ever played a hunt in the channel to be pinged every time anyone asks for the score list
                 msgstring += "({0}: {1}) ".format(item[0], str(item[1]))
             if msgstring != "":
                 irc.reply(
@@ -870,6 +929,31 @@ class DuckHunt(callbacks.Plugin):
                 irc.reply(msgstring)
             else:
                 irc.reply("There aren't any scores for this channel yet.")
+
+            # Also show persistent friendship leaderboard
+            try:
+                friendsdict = self.channelfriends.get(channel, {})
+            except:
+                friendsdict = {}
+
+            friends = sorted(iter(friendsdict.items()), key=itemgetter(1), reverse=True)
+            del friends[listsize:]
+
+            msgstring = ""
+            for item in friends:
+                msgstring += "({0}: {1}) ".format(item[0], str(item[1]))
+            if msgstring != "":
+                irc.reply(
+                    "🦆❤️ ~ DuckHunt top-"
+                    + str(listsize)
+                    + " duck friends for "
+                    + channel
+                    + " ~ 🦆"
+                )
+                irc.reply(msgstring)
+            else:
+                # If there are no friendship records yet, be silent about it (or inform)
+                irc.reply("There aren't any friendship records for this channel yet.")
         else:
             irc.reply("Are you sure this is a channel?")
 
@@ -879,7 +963,6 @@ class DuckHunt(callbacks.Plugin):
         """
         Shows the total amount of ducks shot in <channel> (or in the current channel if no channel is given)
         """
-
         if irc.isChannel(channel):
             self._read_scores(channel)
             if self.channelscores.get(channel):
@@ -891,6 +974,14 @@ class DuckHunt(callbacks.Plugin):
             else:
                 irc.reply("There are no scores for this channel yet")
 
+            # Also show total befriended ducks (persistent)
+            try:
+                friends = self.channelfriends.get(channel, {})
+                total_bef = sum(friends.values()) if friends else 0
+            except:
+                total_bef = 0
+
+            irc.reply(str(total_bef) + " 🦆 ducks have been befriended in " + channel + "!")
         else:
             irc.error("Are you sure this is a channel?")
 
@@ -931,8 +1022,6 @@ class DuckHunt(callbacks.Plugin):
 
             msgstring = ""
             for item in times:
-                # Same as in listscores for the xnickx
-                # msgstring += "x" + item[0] + "x: "+ str(round(item[1],2)) + " | "
                 msgstring += "({0}: {1}) ".format(item[0], str(round(item[1], 2)))
             if msgstring != "":
                 irc.reply(
@@ -955,8 +1044,6 @@ class DuckHunt(callbacks.Plugin):
 
             msgstring = ""
             for item in times:
-                # Same as in listscores for the xnickx
-                # msgstring += "x" + item[0] + "x: "+ time.strftime('%H:%M:%S', time.gmtime(item[1])) + ", "
                 roundseconds = round(item[1])
                 delta = datetime.timedelta(seconds=roundseconds)
                 msgstring += "({0}: {1}) ".format(item[0], str(delta))
@@ -988,6 +1075,9 @@ class DuckHunt(callbacks.Plugin):
 
     dbg = wrap(dbg)
 
+    # ---------------------------
+    # Bang (shoot) command
+    # ---------------------------
     def bang(self, irc, msg, args):
         """
         Shoots the duck! ▄︻デ══━一💥
@@ -1073,12 +1163,12 @@ class DuckHunt(callbacks.Plugin):
                 # There was a duck
                 if self.duck[currentChannel] == True:
 
-                    # Did the player missed it?
+                    # Did the player miss it?
                     if random.random() < self.missprobability[currentChannel]:
                         irc.reply("❌ You missed the duck! ❌")
                     else:
 
-                        # Adds one point for the nick that shot the duck
+                        # Adds one point for the nick that shot the duck (current hunt)
                         try:
                             self.scores[currentChannel][msg.nick] += 1
                         except:
@@ -1088,28 +1178,64 @@ class DuckHunt(callbacks.Plugin):
                                 self.scores[currentChannel] = {}
                                 self.scores[currentChannel][msg.nick] = 1
 
+                        # Also update persistent totals immediately if autosave is ON
+                        if self.autosave:
+                            try:
+                                self._read_scores(currentChannel)
+                                if msg.nick not in self.channelscores[currentChannel]:
+                                    self.channelscores[currentChannel][msg.nick] = 1
+                                else:
+                                    self.channelscores[currentChannel][msg.nick] += 1
+                                # Write persistent scores right away
+                                self._write_scores(currentChannel)
+                            except Exception:
+                                pass
+
                         irc.reply(
                             "🦆✔️ | Score: %i (%.2f seconds )"
                             % (self.scores[currentChannel][msg.nick], bangdelay)
                         )
 
-                        self.averagetime[currentChannel] += bangdelay
+                        # Update average time
+                        if bangdelay:
+                            self.averagetime[currentChannel] += bangdelay
 
-                        # Now save the bang delay for the player (if it's quicker than it's previous bangdelay)
-                        try:
-                            previoustime = self.toptimes[currentChannel][msg.nick]
-                            if bangdelay < previoustime:
+                            # Now save the bang delay for the player (if it's quicker than it's previous bangdelay)
+                            try:
+                                previoustime = self.toptimes[currentChannel][msg.nick]
+                                if bangdelay < previoustime:
+                                    self.toptimes[currentChannel][msg.nick] = bangdelay
+                            except:
                                 self.toptimes[currentChannel][msg.nick] = bangdelay
-                        except:
-                            self.toptimes[currentChannel][msg.nick] = bangdelay
 
-                        # Now save the bang delay for the player (if it's worst than it's previous bangdelay)
-                        try:
-                            previoustime = self.worsttimes[currentChannel][msg.nick]
-                            if bangdelay > previoustime:
+                            # Now save the bang delay for the player (if it's worse than it's previous bangdelay)
+                            try:
+                                previoustime = self.worsttimes[currentChannel][msg.nick]
+                                if bangdelay > previoustime:
+                                    self.worsttimes[currentChannel][msg.nick] = bangdelay
+                            except:
                                 self.worsttimes[currentChannel][msg.nick] = bangdelay
-                        except:
-                            self.worsttimes[currentChannel][msg.nick] = bangdelay
+
+                            # If this produced a new persistent best/worst time, save immediately
+                            try:
+                                self._read_scores(currentChannel)
+                                # best
+                                if (
+                                    msg.nick not in self.channeltimes[currentChannel]
+                                    or self.toptimes[currentChannel][msg.nick]
+                                    < self.channeltimes[currentChannel][msg.nick]
+                                ):
+                                    self.channeltimes[currentChannel][msg.nick] = self.toptimes[currentChannel][msg.nick]
+                                # worst
+                                if (
+                                    msg.nick not in self.channelworsttimes[currentChannel]
+                                    or self.worsttimes[currentChannel][msg.nick]
+                                    > self.channelworsttimes[currentChannel][msg.nick]
+                                ):
+                                    self.channelworsttimes[currentChannel][msg.nick] = self.worsttimes[currentChannel][msg.nick]
+                                self._write_scores(currentChannel)
+                            except Exception:
+                                pass
 
                         self.duck[currentChannel] = False
 
@@ -1149,6 +1275,18 @@ class DuckHunt(callbacks.Plugin):
                         except:
                             self.scores[currentChannel] = {}
                             self.scores[currentChannel][msg.nick] = -1
+
+                    # If autosave: also reflect persistent totals immediately
+                    if self.autosave:
+                        try:
+                            self._read_scores(currentChannel)
+                            if msg.nick not in self.channelscores[currentChannel]:
+                                self.channelscores[currentChannel][msg.nick] = self.scores[currentChannel][msg.nick]
+                            else:
+                                self.channelscores[currentChannel][msg.nick] = self.channelscores[currentChannel].get(msg.nick,0) + ( -1 )
+                            self._write_scores(currentChannel)
+                        except Exception:
+                            pass
 
                     # Base message
                     message = "❌ There was no duck! ❌"
@@ -1191,7 +1329,9 @@ class DuckHunt(callbacks.Plugin):
 
     bang = wrap(bang)
 
-    # --- NEW: bef command (befriend) ---
+    # ---------------------------
+    # Befriend (bef) command — fully integrated and autosaved
+    # ---------------------------
     def bef(self, irc, msg, args):
         """
         Try to befriend a duck 🦆❤️
@@ -1201,7 +1341,7 @@ class DuckHunt(callbacks.Plugin):
         if irc.isChannel(currentChannel):
             if self.started.get(currentChannel) == True:
 
-                # Ensure friends dicts exist
+                # Ensure in-memory dicts exist
                 try:
                     self.friends[currentChannel]
                 except:
@@ -1209,7 +1349,6 @@ class DuckHunt(callbacks.Plugin):
                 try:
                     self.channelfriends[currentChannel]
                 except:
-                    # don't overwrite if it was loaded from disk
                     self.channelfriends[currentChannel] = {}
 
                 # There was a duck
@@ -1217,11 +1356,24 @@ class DuckHunt(callbacks.Plugin):
                     # 60% success chance
                     roll = random.random()
                     if roll <= 0.6:
-                        # success: +1 friendship point
+                        # success: +1 friendship point (current hunt)
                         try:
                             self.friends[currentChannel][msg.nick] += 1
                         except:
                             self.friends[currentChannel][msg.nick] = 1
+
+                        # Autosave persistent friendship total if configured
+                        if self.autosave:
+                            try:
+                                self._read_scores(currentChannel)
+                                if msg.nick not in self.channelfriends[currentChannel]:
+                                    self.channelfriends[currentChannel][msg.nick] = 1
+                                else:
+                                    self.channelfriends[currentChannel][msg.nick] += 1
+                                self._write_scores(currentChannel)
+                            except Exception:
+                                pass
+
                         irc.reply(
                             "🦆❤️ %s, you gently befriended the duck! (+1 friendship point)"
                             % (msg.nick,)
@@ -1232,6 +1384,19 @@ class DuckHunt(callbacks.Plugin):
                             self.friends[currentChannel][msg.nick] -= 1
                         except:
                             self.friends[currentChannel][msg.nick] = -1
+
+                        # Reflect penalty in persistent totals if autosave
+                        if self.autosave:
+                            try:
+                                self._read_scores(currentChannel)
+                                if msg.nick not in self.channelfriends[currentChannel]:
+                                    self.channelfriends[currentChannel][msg.nick] = self.friends[currentChannel][msg.nick]
+                                else:
+                                    self.channelfriends[currentChannel][msg.nick] += -1
+                                self._write_scores(currentChannel)
+                            except Exception:
+                                pass
+
                         irc.reply(
                             "💨 %s, the duck got scared and flew away! (-1 friendship point)"
                             % (msg.nick,)
@@ -1242,15 +1407,25 @@ class DuckHunt(callbacks.Plugin):
                     # Reset throttle base time
                     self.lastSpoke[currentChannel] = time.time()
 
-                    # If the hunt should end after N ducks (configured via 'ducks'), it's based on shoots
-                    # (launch increments shoots). No change needed here.
-
                 else:
                     # No duck present -> penalty
                     try:
                         self.friends[currentChannel][msg.nick] -= 1
                     except:
                         self.friends[currentChannel][msg.nick] = -1
+
+                    # Persist penalty if autosave
+                    if self.autosave:
+                        try:
+                            self._read_scores(currentChannel)
+                            if msg.nick not in self.channelfriends[currentChannel]:
+                                self.channelfriends[currentChannel][msg.nick] = self.friends[currentChannel][msg.nick]
+                            else:
+                                self.channelfriends[currentChannel][msg.nick] += -1
+                            self._write_scores(currentChannel)
+                        except Exception:
+                            pass
+
                     irc.reply(
                         "😅 %s, there’s no duck to befriend right now! (-1 friendship point)"
                         % (msg.nick,)
@@ -1266,6 +1441,9 @@ class DuckHunt(callbacks.Plugin):
 
     bef = wrap(bef)
 
+    # ---------------------------
+    # Event handling
+    # ---------------------------
     def doPrivmsg(self, irc, msg):
         currentChannel = msg.args[0]
         if irc.isChannel(msg.args[0]):
@@ -1281,6 +1459,9 @@ class DuckHunt(callbacks.Plugin):
                     # Else, just say it
                     irc.reply(message)
 
+    # ---------------------------
+    # End hunt summary & cleanup
+    # ---------------------------
     def _end(self, irc, msg, args):
         """
         End of the hunt (is called when the hunts stop "naturally" or when someone uses the !stop command)
@@ -1299,14 +1480,18 @@ class DuckHunt(callbacks.Plugin):
         if not self.registryValue("autoRestart", currentChannel):
             irc.reply("❗ The hunt stops now! ❗", prefixNick=False)
 
-        # Showing scores
+        # Showing shooting scores
         if self.scores.get(currentChannel):
 
             # Getting winner
-            winnernick, winnerscore = max(
-                iter(self.scores.get(currentChannel).items()),
-                key=lambda k_v12: (k_v12[1], k_v12[0]),
-            )
+            try:
+                winnernick, winnerscore = max(
+                    iter(self.scores.get(currentChannel).items()),
+                    key=lambda k_v12: (k_v12[1], k_v12[0]),
+                )
+            except ValueError:
+                winnernick, winnerscore = (None, 0)
+
             if self.registryValue("ducks", currentChannel):
                 maxShoots = self.registryValue("ducks", currentChannel)
             else:
@@ -1319,11 +1504,19 @@ class DuckHunt(callbacks.Plugin):
                     % (winnernick, winnerscore, maxShoots, self.perfectbonus),
                     prefixNick=False,
                 )
-                self.scores[currentChannel][winnernick] += self.perfectbonus
+                # If autosave is ON, this perfect bonus should be applied persistently already;
+                # if autosave is OFF, make sure we add it before writing.
+                try:
+                    self.scores[currentChannel][winnernick] += self.perfectbonus
+                    if self.autosave:
+                        # reflect in permanent totals as well
+                        self._read_scores(currentChannel)
+                        self.channelscores[currentChannel][winnernick] = self.channelscores[currentChannel].get(winnernick,0) + self.perfectbonus
+                        self._write_scores(currentChannel)
+                except Exception:
+                    pass
             else:
                 # Showing scores
-                # irc.reply("Winner: %s with %i points" % (winnernick, winnerscore))
-                # irc.reply(self.scores.get(currentChannel))
                 reply = []
                 for nick, score in sorted(
                     iter(self.scores.get(currentChannel).items()),
@@ -1341,108 +1534,94 @@ class DuckHunt(callbacks.Plugin):
                     prefixNick=False,
                 )
 
-            # Getting channel best time (to see if the best time of this hunt is better)
-            channelbestnick = None
-            channelbesttime = None
-            if self.channeltimes.get(currentChannel):
-                channelbestnick, channelbesttime = min(
-                    iter(self.channeltimes.get(currentChannel).items()),
-                    key=lambda k_v5: (k_v5[1], k_v5[0]),
-                )
-
-            # Showing best time
-            recordmsg = ""
+            # Showing best time for this hunt
             try:
                 if self.toptimes.get(currentChannel):
                     key, value = min(
                         iter(self.toptimes.get(currentChannel).items()),
                         key=lambda k_v6: (k_v6[1], k_v6[0]),
                     )
-                if channelbesttime and value < channelbesttime:
-                    recordmsg = (
-                        ". 🏆 This is the new record for this channel! (previous record"
-                        " was held by "
-                        + channelbestnick
-                        + " with "
-                        + str(round(channelbesttime, 2))
-                        + " seconds)"
-                    )
-                else:
-                    try:
-                        if value < self.channeltimes[currentChannel][key]:
-                            recordmsg = (
-                                " (this is your new record in this channel! 🏆 Your"
-                                " previous record was "
-                                + str(round(self.channeltimes[currentChannel][key], 2))
-                                + ")"
+                    # compare with persistent top
+                    channelbestnick = None
+                    channelbesttime = None
+                    if self.channeltimes.get(currentChannel):
+                        try:
+                            channelbestnick, channelbesttime = min(
+                                iter(self.channeltimes.get(currentChannel).items()),
+                                key=lambda k_v5: (k_v5[1], k_v5[0]),
                             )
-                    except:
-                        recordmsg = ""
-                irc.reply(
-                    "🕒 Best time: %s with %.2f seconds%s" % (key, value, recordmsg),
-                    prefixNick=False,
-                )
-            except:
-                recordmsg = ""
+                        except Exception:
+                            channelbestnick, channelbesttime = (None, None)
 
-            # Getting channel worst time (to see if the worst time of this hunt is worst)
-            channelworstnick = None
-            channelworsttime = None
-            if self.channelworsttimes.get(currentChannel):
-                channelworstnick, channelworsttime = max(
-                    iter(self.channelworsttimes.get(currentChannel).items()),
-                    key=lambda k_v7: (k_v7[1], k_v7[0]),
-                )
+                    recordmsg = ""
+                    if channelbesttime and value < channelbesttime:
+                        recordmsg = (
+                            ". 🏆 This is the new record for this channel! (previous record"
+                            " was held by "
+                            + str(channelbestnick)
+                            + " with "
+                            + str(round(channelbesttime, 2))
+                            + " seconds)"
+                        )
+                    irc.reply(
+                        "🕒 Best time: %s with %.2f seconds%s" % (key, value, recordmsg),
+                        prefixNick=False,
+                    )
+            except Exception:
+                pass
 
-            # Showing worst time
-            recordmsg = ""
+            # Show longest time if meaningful
             try:
                 if self.worsttimes.get(currentChannel):
                     key, value = max(
                         iter(self.worsttimes.get(currentChannel).items()),
                         key=lambda k_v8: (k_v8[1], k_v8[0]),
                     )
-                if channelworsttime and value > channelworsttime:
-                    recordmsg = (
-                        ". 🕒 This is the new longest time for this channel! (previous"
-                        " longest time was held by "
-                        + channelworstnick
-                        + " with "
-                        + str(round(channelworsttime, 2))
-                        + " seconds)"
-                    )
-                else:
-                    try:
-                        if value > self.channelworsttimes[currentChannel][key]:
-                            recordmsg = (
-                                " (this is your new longest time in this channel! 🕒 Your"
-                                " previous longest time was "
-                                + str(
-                                    round(
-                                        self.channelworsttimes[currentChannel][key], 2
-                                    )
-                                )
-                                + ")"
+                    channelworstnick = None
+                    channelworsttime = None
+                    if self.channelworsttimes.get(currentChannel):
+                        try:
+                            channelworstnick, channelworsttime = max(
+                                iter(self.channelworsttimes.get(currentChannel).items()),
+                                key=lambda k_v7: (k_v7[1], k_v7[0]),
                             )
-                    except:
-                        recordmsg = ""
-            except:
-                recordmsg = ""
+                        except Exception:
+                            channelworstnick, channelworsttime = (None, None)
 
-            # Only display worst time if something new
-            if recordmsg != "":
-                irc.reply(
-                    "🕒 Longest time: %s with %.2f seconds%s" % (key, value, recordmsg),
-                    prefixNick=False,
-                )
+                    recordmsg = ""
+                    if channelworsttime and value > channelworsttime:
+                        recordmsg = (
+                            ". 🕒 This is the new longest time for this channel! (previous"
+                            " longest time was held by "
+                            + str(channelworstnick)
+                            + " with "
+                            + str(round(channelworsttime, 2))
+                            + " seconds)"
+                        )
+                    if recordmsg != "":
+                        irc.reply(
+                            "🕒 Longest time: %s with %.2f seconds%s"
+                            % (key, value, recordmsg),
+                            prefixNick=False,
+                        )
+            except Exception:
+                pass
 
-            # Showing average shooting time:
-            # if (self.shoots[currentChannel] > 1):
-            # irc.reply("Average shooting time: %.2f seconds" % ((self.averagetime[currentChannel] / self.shoots[currentChannel])))
+            # Write persistent times/records and week scores and friendships
+            try:
+                # If autosave is disabled, aggregate scores/friends now (to persistent totals)
+                if not self.autosave:
+                    self._calc_scores(currentChannel)
+                else:
+                    # autosave enabled: we still need to merge times and week info
+                    # merge times/week:
+                    # _calc_scores handles times and week; call it but it won't double-add scores/friends
+                    self._calc_scores(currentChannel)
 
-            # Write the scores and times to disk
-            self._calc_scores(currentChannel)
-            self._write_scores(currentChannel)
+                # Write everything to disk
+                self._write_scores(currentChannel)
+            except Exception:
+                pass
 
             # Did someone took the lead?
             weekscores = {}
@@ -1484,6 +1663,28 @@ class DuckHunt(callbacks.Plugin):
         else:
             irc.reply("❗😮 Not a single duck was shot during this hunt!", prefixNick=False)
 
+        # --- Friendship summary for this hunt ---
+        try:
+            if self.friends.get(currentChannel):
+                reply = []
+                for nick, score in sorted(
+                    iter(self.friends.get(currentChannel).items()),
+                    key=itemgetter(1),
+                    reverse=True,
+                ):
+                    reply.append("({0}: {1})".format(nick, score))
+                irc.reply(
+                    "🦆❤️ Friendship scores this hunt: "
+                    + str(reply)
+                    .replace("[", "")
+                    .replace("]", "")
+                    .replace(",", "")
+                    .replace("'", ""),
+                    prefixNick=False,
+                )
+        except Exception:
+            pass
+
         # Reinit current hunt scores
         if self.scores.get(currentChannel):
             self.scores[currentChannel] = {}
@@ -1498,12 +1699,15 @@ class DuckHunt(callbacks.Plugin):
         if self.friends.get(currentChannel):
             self.friends[currentChannel] = {}
 
-        # No duck lauched
+        # No duck launched
         self.duck[currentChannel] = False
 
         # Reinit number of shoots
         self.shoots[currentChannel] = 0
 
+    # ---------------------------
+    # Launch a duck
+    # ---------------------------
     def _launch(self, irc, msg, args):
         """
         Launch a duck
@@ -1523,7 +1727,7 @@ class DuckHunt(callbacks.Plugin):
                     irc.sendMsg(ircmsgs.privmsg(currentChannel, "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🦆 QUACK!"))
 
                     # Define a new throttle[currentChannel] for the next launch
-                    self.throttle[channel] = random.randint(
+                    self.throttle[currentChannel] = random.randint(
                         self.minthrottle[currentChannel],
                         self.maxthrottle[currentChannel],
                     )
@@ -1533,15 +1737,15 @@ class DuckHunt(callbacks.Plugin):
                     except:
                         self.shoots[currentChannel] = 1
                 else:
-
                     irc.reply("Already a duck")
             else:
                 irc.reply("❌ The hunt has not started yet!")
         else:
             irc.error("❗ You have to be on a channel")
 
-
-    # --- NEW: listfriends command (shows persistent friendship leaderboard) ---
+    # ---------------------------
+    # listfriends (persistent)
+    # ---------------------------
     def listfriends(self, irc, msg, args, size, channel):
         """
         [<size>] [<channel>]

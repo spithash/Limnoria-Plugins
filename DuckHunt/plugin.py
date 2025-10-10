@@ -1,4 +1,3 @@
-###
 # Copyright (c) 2012, Matthias Meusburger
 # Copyright (c) 2020, oddluck <oddluck@riseup.net>
 # All rights reserved.
@@ -73,6 +72,10 @@ class DuckHunt(callbacks.Plugin):
     reloadtime = {}  # Time to reload after shooting (in seconds)
     reloadcount = {}  # Number of shots fired while reloading
 
+    # New: befriending stats
+    friends = {}  # current hunt friendship counts (per-channel)
+    channelfriends = {}  # saved friendship totals per channel (persistent)
+
     # Does a duck needs to be launched?
     lastSpoke = {}
     minthrottle = {}
@@ -143,16 +146,6 @@ class DuckHunt(callbacks.Plugin):
                 if self.worsttimes[channel][player] > value:
                     self.channelworsttimes[channel][player] = value
 
-        # # week scores
-        # for player, value in self.scores[channel].items():
-        #     # FIXME: If the hunt starts a day and ends the day after, this will produce an error:
-        #     if not player in self.channelweek[channel][self.woy][self.dow]:
-        #         # It's a new player
-        #         self.channelweek[channel][self.woy][self.dow][player] = value
-        #     else:
-        #         # It's a player that already has a saved score
-        #         self.channelweek[channel][self.woy][self.dow][player] += value
-
         # week scores
         for player, value in self.scores[channel].items():
             # Ensure that the channel exists
@@ -174,6 +167,29 @@ class DuckHunt(callbacks.Plugin):
             else:
                 # It's a player that already has a saved score
                 self.channelweek[channel][self.woy][self.dow][player] += value
+
+        # --- SAFER best-time handling: ensure new players' best times are recorded ---
+        # This protects against the case where channeltimes doesn't have the player yet.
+        try:
+            for player, val in self.toptimes.get(channel, {}).items():
+                if (player not in self.channeltimes[channel]) or (
+                    val < self.channeltimes[channel][player]
+                ):
+                    self.channeltimes[channel][player] = val
+        except Exception:
+            pass
+
+        # --- FRIENDSHIPS accumulation (new feature) ---
+        try:
+            if channel not in self.channelfriends:
+                self.channelfriends[channel] = {}
+            for player, val in self.friends.get(channel, {}).items():
+                if player not in self.channelfriends[channel]:
+                    self.channelfriends[channel][player] = val
+                else:
+                    self.channelfriends[channel][player] += val
+        except Exception:
+            pass
 
     def _write_scores(self, channel):
         """
@@ -204,6 +220,15 @@ class DuckHunt(callbacks.Plugin):
         )
         pickle.dump(self.channelweek[channel], outputfile)
         outputfile.close()
+
+        # friendships (new)
+        try:
+            outputfile = open(self.path.dirize(self.fileprefix + channel + ".friends"), "wb")
+            pickle.dump(self.channelfriends[channel], outputfile)
+            outputfile.close()
+        except Exception:
+            # If channelfriends isn't initialized yet, ignore
+            pass
 
     def _read_scores(self, channel):
         """
@@ -237,6 +262,16 @@ class DuckHunt(callbacks.Plugin):
                 inputfile = open(filename + self.year + ".weekscores", "rb")
                 self.channelweek[channel] = pickle.load(inputfile)
                 inputfile.close()
+
+        # friendships (new)
+        if not self.channelfriends.get(channel):
+            if os.path.isfile(filename + ".friends"):
+                try:
+                    inputfile = open(filename + ".friends", "rb")
+                    self.channelfriends[channel] = pickle.load(inputfile)
+                    inputfile.close()
+                except Exception:
+                    self.channelfriends[channel] = {}
 
     def _initdayweekyear(self, channel):
         self.dow = int(time.strftime("%u"))  # Day of week
@@ -400,6 +435,16 @@ class DuckHunt(callbacks.Plugin):
                     )
                 except AssertionError:
                     pass
+
+                # Init friendships for this hunt
+                try:
+                    self.friends[currentChannel]
+                except:
+                    self.friends[currentChannel] = {}
+                try:
+                    self.channelfriends[currentChannel]
+                except:
+                    self.channelfriends[currentChannel] = {}
 
                 irc.reply("✔️ The hunt starts now! 🦆🦆🦆", prefixNick=False)
         else:
@@ -847,7 +892,7 @@ class DuckHunt(callbacks.Plugin):
                 irc.reply("There are no scores for this channel yet")
 
         else:
-            irc.reply("Are you sure this is a channel?")
+            irc.error("Are you sure this is a channel?")
 
     total = wrap(total, ["channel"])
 
@@ -1146,12 +1191,87 @@ class DuckHunt(callbacks.Plugin):
 
     bang = wrap(bang)
 
+    # --- NEW: bef command (befriend) ---
+    def bef(self, irc, msg, args):
+        """
+        Try to befriend a duck 🦆❤️
+        """
+        currentChannel = msg.args[0]
+
+        if irc.isChannel(currentChannel):
+            if self.started.get(currentChannel) == True:
+
+                # Ensure friends dicts exist
+                try:
+                    self.friends[currentChannel]
+                except:
+                    self.friends[currentChannel] = {}
+                try:
+                    self.channelfriends[currentChannel]
+                except:
+                    # don't overwrite if it was loaded from disk
+                    self.channelfriends[currentChannel] = {}
+
+                # There was a duck
+                if self.duck[currentChannel] == True:
+                    # 60% success chance
+                    roll = random.random()
+                    if roll <= 0.6:
+                        # success: +1 friendship point
+                        try:
+                            self.friends[currentChannel][msg.nick] += 1
+                        except:
+                            self.friends[currentChannel][msg.nick] = 1
+                        irc.reply(
+                            "🦆❤️ %s, you gently befriended the duck! (+1 friendship point)"
+                            % (msg.nick,)
+                        )
+                    else:
+                        # fail: -1 friendship point
+                        try:
+                            self.friends[currentChannel][msg.nick] -= 1
+                        except:
+                            self.friends[currentChannel][msg.nick] = -1
+                        irc.reply(
+                            "💨 %s, the duck got scared and flew away! (-1 friendship point)"
+                            % (msg.nick,)
+                        )
+
+                    # Duck leaves regardless
+                    self.duck[currentChannel] = False
+                    # Reset throttle base time
+                    self.lastSpoke[currentChannel] = time.time()
+
+                    # If the hunt should end after N ducks (configured via 'ducks'), it's based on shoots
+                    # (launch increments shoots). No change needed here.
+
+                else:
+                    # No duck present -> penalty
+                    try:
+                        self.friends[currentChannel][msg.nick] -= 1
+                    except:
+                        self.friends[currentChannel][msg.nick] = -1
+                    irc.reply(
+                        "😅 %s, there’s no duck to befriend right now! (-1 friendship point)"
+                        % (msg.nick,)
+                    )
+
+            else:
+                irc.reply(
+                    "❗ There is no hunt right now! You can start a hunt with the 'starthunt'"
+                    " command"
+                )
+        else:
+            irc.error("You have to be on a channel ❗")
+
+    bef = wrap(bef)
+
     def doPrivmsg(self, irc, msg):
         currentChannel = msg.args[0]
         if irc.isChannel(msg.args[0]):
             if msg.args[1] == "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🦆 QUACK!":
                 message = msg.nick + ", don't pretend to be me!"
-                # If kickMode is enabled for this channel, and the bot have op capability, let's kick!
+                # If kickMode is enabled for this channel, and the bot have op capability, let's kick
                 if (
                     self.registryValue("kickMode", currentChannel)
                     and irc.nick in irc.state.channels[currentChannel].ops
@@ -1374,6 +1494,10 @@ class DuckHunt(callbacks.Plugin):
         if self.worsttimes.get(currentChannel):
             self.worsttimes[currentChannel] = {}
 
+        # Reinit friendships for current hunt
+        if self.friends.get(currentChannel):
+            self.friends[currentChannel] = {}
+
         # No duck lauched
         self.duck[currentChannel] = False
 
@@ -1399,7 +1523,7 @@ class DuckHunt(callbacks.Plugin):
                     irc.sendMsg(ircmsgs.privmsg(currentChannel, "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🦆 QUACK!"))
 
                     # Define a new throttle[currentChannel] for the next launch
-                    self.throttle[currentChannel] = random.randint(
+                    self.throttle[channel] = random.randint(
                         self.minthrottle[currentChannel],
                         self.maxthrottle[currentChannel],
                     )
@@ -1417,6 +1541,49 @@ class DuckHunt(callbacks.Plugin):
             irc.error("❗ You have to be on a channel")
 
 
+    # --- NEW: listfriends command (shows persistent friendship leaderboard) ---
+    def listfriends(self, irc, msg, args, size, channel):
+        """
+        [<size>] [<channel>]
+        Shows the <size>-sized friendship list for <channel> (or current channel)
+        """
+        if irc.isChannel(channel):
+            self._read_scores(channel)
+
+            try:
+                friendsdict = self.channelfriends.get(channel, {})
+            except:
+                friendsdict = {}
+
+            if not size:
+                listsize = 10
+            else:
+                listsize = size
+
+            # Sort friendships (higher is better)
+            friends = sorted(iter(friendsdict.items()), key=itemgetter(1), reverse=True)
+            del friends[listsize:]
+
+            msgstring = ""
+            for item in friends:
+                msgstring += "({0}: {1}) ".format(item[0], str(item[1]))
+            if msgstring != "":
+                irc.reply(
+                    "🦆❤️ ~ DuckHunt top-"
+                    + str(listsize)
+                    + " duck friends for "
+                    + channel
+                    + " ~ 🦆"
+                )
+                irc.reply(msgstring)
+            else:
+                irc.reply("There aren't any friendships for this channel yet.")
+        else:
+            irc.reply("Are you sure this is a channel?")
+
+    listfriends = wrap(listfriends, [optional("int"), "channel"])
+
 Class = DuckHunt
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:
+

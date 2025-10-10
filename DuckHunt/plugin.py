@@ -1,7 +1,9 @@
 # Copyright (c) 2012, Matthias Meusburger
 # Copyright (c) 2020, oddluck <oddluck@riseup.net>
+# Copyleft  (ↄ) 2023: Stathis Xantinidis (https://github.com/spithash)
+#
 # Modifications 2025: integrated befriending fully, autosave, huntscore, totals, etc.
-# All rights reserved.
+# All wrongs reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:

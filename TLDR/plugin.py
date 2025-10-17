@@ -91,7 +91,7 @@ class TLDR(callbacks.Plugin):
             sanitized_command = ' '.join(part for part in command.split() if part not in invalid_switches)
             
             # Execute the tldr command with -c switch to enforce color output
-            result = subprocess.run(['tldr', '-c'] + sanitized_command.split(), capture_output=True, text=True)
+            result = subprocess.run(['tldr', '--color'] + sanitized_command.split(), capture_output=True, text=True)
             if result.returncode != 0:
                 # Error message handling
                 error_message = result.stderr.strip()

@@ -48,13 +48,6 @@ class DuckHunt(callbacks.Plugin):
     A DuckHunt game for supybot. Use the "starthunt" command to start a game.
     The bot will randomly launch ducks. Whenever a duck is launched, the first
     person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks.
-    This version includes bug fixes and enhancements:
-      - no-year weekly score filenames (unified)
-      - rounds end correctly (counting successful shots)
-      - proper autorestart after end
-      - combo/streak system (bonuses)
-      - golden ducks (random critical / bonus)
-      - live mini-leaderboard announcements when someone takes the lead mid-round
     """
 
     threaded = True

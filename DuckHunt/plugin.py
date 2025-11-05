@@ -48,6 +48,13 @@ class DuckHunt(callbacks.Plugin):
     A DuckHunt game for supybot. Use the "starthunt" command to start a game.
     The bot will randomly launch ducks. Whenever a duck is launched, the first
     person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks.
+    This version includes bug fixes and enhancements:
+      - no-year weekly score filenames (unified)
+      - rounds end correctly (counting successful shots)
+      - proper autorestart after end
+      - combo/streak system (bonuses)
+      - golden ducks (random critical / bonus)
+      - live mini-leaderboard announcements when someone takes the lead mid-round
     """
 
     threaded = True
@@ -55,7 +62,7 @@ class DuckHunt(callbacks.Plugin):
     # Those parameters are per-channel parameters
     started = {}  # Has the hunt started?
     duck = {}  # Is there currently a duck to shoot?
-    shoots = {}  # Number of successful shoots in a hunt
+    shoots = {}  # Number of successful shoots in a hunt (now counts successful shots only)
     scores = {}  # Scores for the current hunt (shooting)
     times = {}  # Elapsed time since the last duck was launched (for bang)
     channelscores = {}  # Saved scores for the channel (persistent)
@@ -96,7 +103,7 @@ class DuckHunt(callbacks.Plugin):
 
     # Other params
     perfectbonus = 5  # How many extra-points are given when someone does a perfect hunt?
-    toplist = 15  # How many high{scores|times} are displayed by default?
+    toplist = 15  # How many high{scores|times} are displayed by default:
     dow = int(time.strftime("%u"))  # Day of week
     woy = int(time.strftime("%V"))  # Week of year
     year = time.strftime("%Y")
@@ -109,6 +116,13 @@ class DuckHunt(callbacks.Plugin):
         "Saturday",
         "Sunday",
     ]
+
+    # New gameplay state
+    streaks = {}  # per-channel, per-nick streak counters (successful shots in a row)
+    ducktype = {}  # per-channel current duck type (e.g., 'normal', 'golden')
+    huntLeader = {}  # per-channel current hunt leader (nick)
+    # chance for a golden duck (0..1). Could be exposed to config later.
+    golden_chance = 0.05
 
     # ---------------------------
     # Data persistence utilities
@@ -217,8 +231,9 @@ class DuckHunt(callbacks.Plugin):
         except Exception:
             pass
 
+        # unified weekly scores file (no year suffix)
         try:
-            with open(filename_base + self.year + ".weekscores", "wb") as outputfile:
+            with open(filename_base + ".weekscores", "wb") as outputfile:
                 pickle.dump(self.channelweek[channel], outputfile)
         except Exception:
             pass
@@ -231,9 +246,11 @@ class DuckHunt(callbacks.Plugin):
 
     def _read_scores(self, channel):
         """
-        Reads scores and times from disk
+        Reads scores and times from disk, including backward compatibility
+        with old year-suffixed weekly score files.
         """
         filename = self.path.dirize(self.fileprefix + channel)
+
         # scores
         try:
             if not self.channelscores.get(channel):
@@ -267,13 +284,35 @@ class DuckHunt(callbacks.Plugin):
         except Exception:
             self.channelworsttimes[channel] = {}
 
-        # week scores
+        # unified weekly scores file (no year suffix)
         try:
             if not self.channelweek.get(channel):
-                if os.path.isfile(filename + self.year + ".weekscores"):
-                    with open(filename + self.year + ".weekscores", "rb") as inputfile:
-                        self.channelweek[channel] = pickle.load(inputfile)
+                weekfile = filename + ".weekscores"
+                # backward-compatibility: load any existing *.weekscores file with the same prefix
+                data_loaded = False
+                if os.path.isfile(weekfile):
+                    try:
+                        with open(weekfile, "rb") as inputfile:
+                            self.channelweek[channel] = pickle.load(inputfile)
+                            data_loaded = True
+                    except Exception:
+                        self.channelweek[channel] = {}
                 else:
+                    # search for other *.weekscores files with the same base (like the old year-suffixed ones)
+                    try:
+                        base = os.path.basename(filename)
+                        for f in os.listdir(self.path):
+                            if f.startswith(base) and f.endswith(".weekscores"):
+                                try:
+                                    with open(os.path.join(self.path, f), "rb") as inputfile:
+                                        self.channelweek[channel] = pickle.load(inputfile)
+                                        data_loaded = True
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+                if not data_loaded:
                     self.channelweek[channel] = {}
         except Exception:
             self.channelweek[channel] = {}
@@ -293,9 +332,10 @@ class DuckHunt(callbacks.Plugin):
     # Initialization helpers
     # ---------------------------
     def _initdayweekyear(self, channel):
+        # Refresh day, week and year dynamically
         self.dow = int(time.strftime("%u"))  # Day of week
         self.woy = int(time.strftime("%V"))  # Week of year
-        year = time.strftime("%Y")
+        self.year = time.strftime("%Y")
 
         # Init week scores
         try:
@@ -433,7 +473,7 @@ class DuckHunt(callbacks.Plugin):
                 # Hunt started
                 self.started[currentChannel] = True
 
-                # Init shoots
+                # Init shoots (successful shots)
                 self.shoots[currentChannel] = 0
 
                 # Init averagetime
@@ -468,6 +508,11 @@ class DuckHunt(callbacks.Plugin):
                 except:
                     # don't overwrite if it was loaded from disk
                     self.channelfriends[currentChannel] = {}
+
+                # Init new gameplay-specific dicts
+                self.streaks[currentChannel] = {}
+                self.ducktype[currentChannel] = None
+                self.huntLeader[currentChannel] = None
 
                 irc.reply("✔️ The hunt starts now! 🦆🦆🦆", prefixNick=False)
         else:
@@ -536,7 +581,7 @@ class DuckHunt(callbacks.Plugin):
                 ):
                     self.manualFriday[channel] = True
                     irc.reply(
-                        "Friday mode is now enabled! Shoot alllllllllllll the ducks!"
+                        "Friday mode is now enabled! Shoot alllllll the ducks!"
                     )
                 else:
                     self.manualFriday[channel] = False
@@ -1167,36 +1212,79 @@ class DuckHunt(callbacks.Plugin):
 
                     # Did the player miss it?
                     if random.random() < self.missprobability[currentChannel]:
+                        # reset player's streak on miss
+                        try:
+                            self.streaks[currentChannel][msg.nick] = 0
+                        except:
+                            self.streaks[currentChannel] = {}
+                            self.streaks[currentChannel][msg.nick] = 0
                         irc.reply("❌ You missed the duck! ❌")
                     else:
+                        # SUCCESS: calculate points including streak and golden bonuses
+                        points_awarded = 1
 
-                        # Adds one point for the nick that shot the duck (current hunt)
+                        # golden duck bonus
+                        is_golden = (
+                            self.ducktype.get(currentChannel) == "golden"
+                        )
+                        if is_golden:
+                            points_awarded += 1  # golden = +1 extra point (total 2)
+
+                        # Adds points for the nick that shot the duck (current hunt)
                         try:
-                            self.scores[currentChannel][msg.nick] += 1
+                            self.scores[currentChannel][msg.nick] += points_awarded
                         except:
                             try:
-                                self.scores[currentChannel][msg.nick] = 1
+                                self.scores[currentChannel][msg.nick] = points_awarded
                             except:
                                 self.scores[currentChannel] = {}
-                                self.scores[currentChannel][msg.nick] = 1
+                                self.scores[currentChannel][msg.nick] = points_awarded
+
+                        # Streak handling: increment shooter's streak, reset on others? we reset only on miss
+                        try:
+                            self.streaks[currentChannel][msg.nick] += 1
+                        except:
+                            try:
+                                self.streaks[currentChannel]
+                            except:
+                                self.streaks[currentChannel] = {}
+                            self.streaks[currentChannel][msg.nick] = 1
+
+                        # Additional combo bonus for streaks
+                        # e.g., +1 extra point when streak >= 3, +2 at >=6, etc.
+                        streak = self.streaks[currentChannel].get(msg.nick, 0)
+                        if streak >= 6:
+                            combo_bonus = 2
+                        elif streak >= 3:
+                            combo_bonus = 1
+                        else:
+                            combo_bonus = 0
+
+                        if combo_bonus:
+                            self.scores[currentChannel][msg.nick] += combo_bonus
+                            points_awarded += combo_bonus
 
                         # Also update persistent totals immediately if autosave is ON
                         if self.autosave:
                             try:
                                 self._read_scores(currentChannel)
                                 if msg.nick not in self.channelscores[currentChannel]:
-                                    self.channelscores[currentChannel][msg.nick] = 1
+                                    self.channelscores[currentChannel][msg.nick] = self.scores[currentChannel][msg.nick]
                                 else:
-                                    self.channelscores[currentChannel][msg.nick] += 1
+                                    self.channelscores[currentChannel][msg.nick] += points_awarded
                                 # Write persistent scores right away
                                 self._write_scores(currentChannel)
                             except Exception:
                                 pass
 
-                        irc.reply(
-                            "🦆✔️ | Score: %i (%.2f seconds )"
-                            % (self.scores[currentChannel][msg.nick], bangdelay)
-                        )
+                        # announce golden duck
+                        if is_golden:
+                            irc.reply("🌟 GOLDEN DUCK! %s claims it for %d points! 🌟" % (msg.nick, points_awarded))
+                        else:
+                            irc.reply(
+                                "🦆✔️ | Score: %i (%.2f seconds )"
+                                % (self.scores[currentChannel][msg.nick], bangdelay)
+                            )
 
                         # Update average time
                         if bangdelay:
@@ -1239,36 +1327,60 @@ class DuckHunt(callbacks.Plugin):
                             except Exception:
                                 pass
 
+                        # mark duck gone
                         self.duck[currentChannel] = False
 
                         # Reset the basetime for the waiting time before the next duck
                         self.lastSpoke[currentChannel] = time.time()
+
+                        # Increment successful shoots count (this determines round length)
+                        try:
+                            self.shoots[currentChannel] += 1
+                        except:
+                            self.shoots[currentChannel] = 1
+
+                        # Live mini-leaderboard: announce if someone takes the lead mid-round
+                        try:
+                            # find current hunt leader
+                            leader_nick, leader_score = max(
+                                iter(self.scores.get(currentChannel, {}).items()),
+                                key=lambda k_v: (k_v[1], k_v[0]),
+                            )
+                            prev_leader = self.huntLeader.get(currentChannel)
+                            if leader_nick != prev_leader:
+                                if prev_leader:
+                                    irc.reply("%s took the lead for this hunt over %s with %i points. 🏆" % (leader_nick, prev_leader, leader_score))
+                                else:
+                                    irc.reply("%s has the lead for this hunt with %i points. 🏆" % (leader_nick, leader_score))
+                                self.huntLeader[currentChannel] = leader_nick
+                        except Exception:
+                            pass
 
                         if self.registryValue("ducks", currentChannel):
                             maxShoots = self.registryValue("ducks", currentChannel)
                         else:
                             maxShoots = 10
 
-                        # End of Hunt
+                        # End of Hunt when required number of successful shots reached
                         if self.shoots[currentChannel] == maxShoots:
                             self._end(irc, msg, args)
 
                             # If autorestart is enabled, we restart a hunt automatically!
                             if self.registryValue("autoRestart", currentChannel):
-                                # This code shouldn't be here
-                                self.started[currentChannel] = True
-                                self._initthrottle(irc, msg, args, currentChannel)
-                                if self.scores.get(currentChannel):
-                                    self.scores[currentChannel] = {}
-                                if self.reloading.get(currentChannel):
-                                    self.reloading[currentChannel] = {}
-
-                                self.averagetime[currentChannel] = 0
+                                def restart():
+                                    try:
+                                        self.starthunt(irc, msg, args)
+                                    except Exception:
+                                        pass
+                                try:
+                                    schedule.addEvent(restart, 5)
+                                except Exception:
+                                    pass
 
                 # There was no duck or the duck has already been shot
                 else:
 
-                    # Removes one point for the nick that shot
+                    # Removes one point for the nick that shot (penalty)
                     try:
                         self.scores[currentChannel][msg.nick] -= 1
                     except:
@@ -1277,6 +1389,16 @@ class DuckHunt(callbacks.Plugin):
                         except:
                             self.scores[currentChannel] = {}
                             self.scores[currentChannel][msg.nick] = -1
+
+                    # reset streak for this nick on penalty
+                    try:
+                        self.streaks[currentChannel][msg.nick] = 0
+                    except:
+                        try:
+                            self.streaks[currentChannel]
+                        except:
+                            self.streaks[currentChannel] = {}
+                        self.streaks[currentChannel][msg.nick] = 0
 
                     # If autosave: also reflect persistent totals immediately
                     if self.autosave:
@@ -1485,7 +1607,7 @@ class DuckHunt(callbacks.Plugin):
         # Showing shooting scores
         if self.scores.get(currentChannel):
 
-            # Getting winner
+            # Getting winner of current hunt
             try:
                 winnernick, winnerscore = max(
                     iter(self.scores.get(currentChannel).items()),
@@ -1616,7 +1738,6 @@ class DuckHunt(callbacks.Plugin):
                     self._calc_scores(currentChannel)
                 else:
                     # autosave enabled: we still need to merge times and week info
-                    # merge times/week:
                     # _calc_scores handles times and week; call it but it won't double-add scores/friends
                     self._calc_scores(currentChannel)
 
@@ -1625,7 +1746,7 @@ class DuckHunt(callbacks.Plugin):
             except Exception:
                 pass
 
-            # Did someone took the lead?
+            # Did someone took the lead? (weekly leader)
             weekscores = {}
             if self.channelweek.get(currentChannel):
                 if self.channelweek[currentChannel].get(self.woy):
@@ -1707,6 +1828,20 @@ class DuckHunt(callbacks.Plugin):
         # Reinit number of shoots
         self.shoots[currentChannel] = 0
 
+        # reset game-specific dicts for the next hunt
+        try:
+            self.streaks[currentChannel] = {}
+        except:
+            self.streaks[currentChannel] = {}
+        try:
+            self.ducktype[currentChannel] = None
+        except:
+            self.ducktype[currentChannel] = None
+        try:
+            self.huntLeader[currentChannel] = None
+        except:
+            self.huntLeader[currentChannel] = None
+
     # ---------------------------
     # Launch a duck
     # ---------------------------
@@ -1725,8 +1860,15 @@ class DuckHunt(callbacks.Plugin):
                     # Store the fact that there's a duck now
                     self.duck[currentChannel] = True
 
+                    # Decide duck type (golden or normal)
+                    is_golden = random.random() < self.golden_chance
+                    self.ducktype[currentChannel] = "golden" if is_golden else "normal"
+
                     # Send message directly (instead of queuing it with irc.reply)
-                    irc.sendMsg(ircmsgs.privmsg(currentChannel, "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🦆 QUACK!"))
+                    if is_golden:
+                        irc.sendMsg(ircmsgs.privmsg(currentChannel, "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🌟 GOLDEN DUCK! 🌟"))
+                    else:
+                        irc.sendMsg(ircmsgs.privmsg(currentChannel, "🌳🌳🌳 •*´¨`*•.¸¸.•*´¨`*•.¸¸.••*´¨`*•.¸¸ 🦆 QUACK!"))
 
                     # Define a new throttle[currentChannel] for the next launch
                     self.throttle[currentChannel] = random.randint(
@@ -1734,10 +1876,13 @@ class DuckHunt(callbacks.Plugin):
                         self.maxthrottle[currentChannel],
                     )
 
+                    # DO NOT increment self.shoots here anymore — hunts count successful shots
+
                     try:
-                        self.shoots[currentChannel] += 1
+                        # track that a duck was launched (for other logic)
+                        pass
                     except:
-                        self.shoots[currentChannel] = 1
+                        pass
                 else:
                     irc.reply("Already a duck")
             else:
@@ -1792,4 +1937,3 @@ class DuckHunt(callbacks.Plugin):
 Class = DuckHunt
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:
-

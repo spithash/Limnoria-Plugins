@@ -41,7 +41,6 @@ def configure(advanced):
 
     conf.registerPlugin("DuckHunt", True)
 
-
 DuckHunt = conf.registerPlugin("DuckHunt")
 # This is where your configuration variables (if any) should go.  For example:
 # conf.registerGlobalValue(Quote, 'someConfigVariableName',
@@ -107,5 +106,17 @@ conf.registerChannelValue(
     ),
 )
 
+conf.registerGlobalValue(
+    DuckHunt,
+    "networks",
+    registry.SpaceSeparatedListOfStrings(
+        ['all'],
+        """Networks where DuckHunt is enabled. 'all' means all networks."""
+    ),
+)
+
+# Force writing the default if currently unset/empty
+if not conf.supybot.plugins.DuckHunt.networks():
+    conf.supybot.plugins.DuckHunt.networks.set(['all'])
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:

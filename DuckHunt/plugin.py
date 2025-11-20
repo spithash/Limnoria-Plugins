@@ -49,6 +49,22 @@ class DuckHunt(callbacks.Plugin):
     The bot will randomly launch ducks. Whenever a duck is launched, the first
     person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks.
     """
+    @staticmethod
+    def _network_blocker(plugin, command, irc, msg, *args, **kwargs):
+        # Allowed networks from config
+        allowed = plugin.registryValue("networks")
+
+        # Default is ['all'] → allow everywhere
+        if allowed == ['all']:
+            return False  # allow commands
+
+        # If this network is not allowed → silently block commands
+        if irc.network not in allowed:
+            return True  # stop command dispatch silently
+
+        return False  # allow command
+
+    pre_command_callbacks = [_network_blocker]
 
     threaded = True
 
@@ -1472,7 +1488,7 @@ class DuckHunt(callbacks.Plugin):
                 if self.duck[currentChannel] == True:
                     # 60% success chance
                     roll = random.random()
-                    if roll <= 0.6:
+                    if roll <= 0.5:
                         # success: +1 friendship point (current hunt)
                         try:
                             self.friends[currentChannel][msg.nick] += 1

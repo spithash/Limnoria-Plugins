@@ -115,6 +115,15 @@ conf.registerGlobalValue(
     ),
 )
 
+# conf.registerChannelValue(
+#     DuckHunt,
+#     "enabled",
+#     registry.Boolean(
+#         True,
+#         """Whether the DuckHunt plugin is enabled in this channel."""
+#     ),
+# )
+
 # Force writing the default if currently unset/empty
 if not conf.supybot.plugins.DuckHunt.networks():
     conf.supybot.plugins.DuckHunt.networks.set(['all'])

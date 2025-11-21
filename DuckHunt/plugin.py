@@ -49,6 +49,33 @@ class DuckHunt(callbacks.Plugin):
     The bot will randomly launch ducks. Whenever a duck is launched, the first
     person to use the "bang" command wins a point. Same goes for "bef" which is befriending the ducks.
     """
+    # def inFilter(self, irc, msg):
+    #     # Record last IRC context for getCommandMethod
+    #     self._lastMsg = msg
+    #     self._lastIrc = irc
+    #     return msg
+    # def getCommandMethod(self, command):
+    #     # Ask parent class first
+    #     method = super().getCommandMethod(command)
+    #     if method is None:
+    #         return None  # command doesn't exist
+    #
+    #     # Ensure context is available
+    #     msg = getattr(self, "_lastMsg", None)
+    #     irc = getattr(self, "_lastIrc", None)
+    #     if not msg or not irc:
+    #         return method  # fail-safe
+    #
+    #     # Channel commands only: ignore PMs
+    #     if not irc.isChannel(msg.channel):
+    #         return method
+    #
+    #     # Check "enabled" flag at channel level
+    #     if not self.registryValue("enabled", channel=msg.channel, network=irc.network):
+    #         return None  # silently block DuckHunt commands in this channel
+    #
+    #     return method
+
     @staticmethod
     def _network_blocker(plugin, command, irc, msg, *args, **kwargs):
         # Allowed networks from config
@@ -1486,9 +1513,9 @@ class DuckHunt(callbacks.Plugin):
 
                 # There was a duck
                 if self.duck[currentChannel] == True:
-                    # 60% success chance
+                    # 80% success chance
                     roll = random.random()
-                    if roll <= 0.5:
+                    if roll <= 0.8:
                         # success: +1 friendship point (current hunt)
                         try:
                             self.friends[currentChannel][msg.nick] += 1

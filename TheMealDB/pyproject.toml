@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "limnoria-themealdb"
+version = "0.0.0"
+authors = [
+    { name = "Stathis Xantinidis" }
+]
+readme = "README.md"
+dependencies = [
+    "limnoria",
+]
+classifiers = [
+    'Environment :: Plugins',
+    'Programming Language :: Python :: 3',
+    'Topic :: Communications :: Chat',
+]
+
+[project.entry-points.'limnoria.plugins']
+TheMealDB = "limnoria_themealdb"
+
+[tool.setuptools.package-dir]
+"limnoria_themealdb" = "."
+"limnoria_themealdb.local" = "local/"
+
+[tool.setuptools.package-data]
+"limnoria_themealdb" = ["locales/*.po"]

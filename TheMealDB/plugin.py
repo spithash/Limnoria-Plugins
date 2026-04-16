@@ -39,6 +39,11 @@ _ = PluginInternationalization('TheMealDB')
 class TheMealDB(callbacks.Plugin):
     """Fetches recipes from TheMealDB API"""
 
+    def __init__(self, irc):
+        self.__parent = super(TheMealDB, self)
+        self.__parent.__init__(irc)
+        self._last_results = {}  # (channel, nick) -> meals list
+
     def _formatMeal(self, meal, is_random=False):
         name = meal.get("strMeal", "Unknown")
         category = meal.get("strCategory", "Unknown")
@@ -46,7 +51,6 @@ class TheMealDB(callbacks.Plugin):
 
         instructions = (meal.get("strInstructions") or "").replace("\r\n", " ").strip()
 
-        # ---- Collect ALL ingredients ----
         ingredients = []
         for i in range(1, 21):
             ing = meal.get(f"strIngredient{i}")
@@ -56,9 +60,7 @@ class TheMealDB(callbacks.Plugin):
                 meas = (meas or "").strip()
                 ingredients.append(f"{meas} {ing.strip()}".strip())
 
-        # ---- Header ----
         title_text = name
-
         if is_random:
             title_text = f"🔁 (random) {title_text}"
 
@@ -66,11 +68,9 @@ class TheMealDB(callbacks.Plugin):
         meta = f"({category}, {area})"
         line1 = f"{title} {meta}"
 
-        # ---- Ingredients (ONE line) ----
         ing_label = ircutils.bold("🧂 Ingredients:")
         line2 = f"{ing_label} " + ", ".join(ingredients)
 
-        # ---- Extra section ----
         extra = []
 
         if instructions:
@@ -87,10 +87,33 @@ class TheMealDB(callbacks.Plugin):
         return [line1, line2] + extra
 
     def recipe(self, irc, msg, args, query):
-        """[<recipe name>]
-        Fetch a recipe by name, or a random one if no name is given.
+        """[<recipe name>|<number>]
+        Fetch a recipe by name, random, or select from previous results.
         """
 
+        channel = msg.args[0]
+        nick = msg.nick
+        key = (channel, nick)
+
+        # ---- Selection mode ----
+        if query and query.isdigit():
+            if key not in self._last_results:
+                irc.reply("❌ No active search. Try searching first.")
+                return
+
+            meals = self._last_results[key]
+            index = int(query) - 1
+
+            if index < 0 or index >= len(meals):
+                irc.reply("❌ Invalid selection.")
+                return
+
+            meal = meals[index]
+            lines = self._formatMeal(meal)
+            irc.replies(lines, prefixNick=False)
+            return
+
+        # ---- Random or search ----
         is_random = False
 
         if not query or query.lower() in ("random", "rnd", "surprise"):
@@ -111,14 +134,25 @@ class TheMealDB(callbacks.Plugin):
             irc.reply("❌ No recipe found.")
             return
 
-        meal = meals[0]
-        lines = self._formatMeal(meal, is_random=is_random)
+        # ---- Single result ----
+        if len(meals) == 1 or is_random:
+            lines = self._formatMeal(meals[0], is_random=is_random)
+            irc.replies(lines, prefixNick=False)
+            return
 
-        irc.replies(lines, prefixNick=False)
+        # ---- Multiple results ----
+        meals = meals[:6]  # limit to avoid spam
+        self._last_results[key] = meals
+
+        irc.reply(f"🔎 Found {len(meals)} recipes:")
+
+        for i, m in enumerate(meals, 1):
+            irc.reply(f"{i}. {m.get('strMeal')}")
+
+        irc.reply("👉 Type: @recipe <number> to choose")
 
     recipe = wrap(recipe, [optional('text')])
 
 
 Class = TheMealDB
-
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:

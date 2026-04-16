@@ -39,14 +39,14 @@ _ = PluginInternationalization('TheMealDB')
 class TheMealDB(callbacks.Plugin):
     """Fetches recipes from TheMealDB API"""
 
-    def _formatMeal(self, meal):
+    def _formatMeal(self, meal, is_random=False):
         name = meal.get("strMeal", "Unknown")
         category = meal.get("strCategory", "Unknown")
         area = meal.get("strArea", "Unknown")
 
         instructions = (meal.get("strInstructions") or "").replace("\r\n", " ").strip()
 
-        # Collect ALL ingredients
+        # ---- Collect ALL ingredients ----
         ingredients = []
         for i in range(1, 21):
             ing = meal.get(f"strIngredient{i}")
@@ -56,27 +56,33 @@ class TheMealDB(callbacks.Plugin):
                 meas = (meas or "").strip()
                 ingredients.append(f"{meas} {ing.strip()}".strip())
 
-        # ---- Styled header ----
-        title = ircutils.bold(f"🍽️ {name}")
-        meta = f"({category}, {area})"
+        # ---- Header ----
+        title_text = name
 
+        if is_random:
+            title_text = f"🔁 (random) {title_text}"
+
+        title = ircutils.bold(f"🍽️ {title_text}")
+        meta = f"({category}, {area})"
         line1 = f"{title} {meta}"
 
-        # ---- Ingredients in ONE line (bold label) ----
+        # ---- Ingredients (ONE line) ----
         ing_label = ircutils.bold("🧂 Ingredients:")
         line2 = f"{ing_label} " + ", ".join(ingredients)
 
-        # ---- Extra ----
+        # ---- Extra section ----
         extra = []
 
         if instructions:
-            instr_label = ircutils.bold("👨‍🍳 Instructions:")
-            extra.append(f"{instr_label} {instructions}")
+            extra.append(f"{ircutils.bold('👨‍🍳 Instructions:')} {instructions}")
 
-        youtube = meal.get("strYoutube")
+        thumb = (meal.get("strMealThumb") or "").strip()
+        if thumb:
+            extra.append(f"{ircutils.bold('🖼️ Image:')} {thumb}")
+
+        youtube = (meal.get("strYoutube") or "").strip()
         if youtube:
-            vid_label = ircutils.bold("▶️ Video:")
-            extra.append(f"{vid_label} {youtube}")
+            extra.append(f"{ircutils.bold('▶️ Video:')} {youtube}")
 
         return [line1, line2] + extra
 
@@ -85,8 +91,11 @@ class TheMealDB(callbacks.Plugin):
         Fetch a recipe by name, or a random one if no name is given.
         """
 
+        is_random = False
+
         if not query or query.lower() in ("random", "rnd", "surprise"):
             url = "https://www.themealdb.com/api/json/v1/1/random.php"
+            is_random = True
         else:
             url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"
 
@@ -103,9 +112,8 @@ class TheMealDB(callbacks.Plugin):
             return
 
         meal = meals[0]
-        lines = self._formatMeal(meal)
+        lines = self._formatMeal(meal, is_random=is_random)
 
-        # Proper Limnoria multi-line output (supports "more")
         irc.replies(lines, prefixNick=False)
 
     recipe = wrap(recipe, [optional('text')])

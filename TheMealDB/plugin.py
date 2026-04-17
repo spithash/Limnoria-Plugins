@@ -73,7 +73,37 @@ class TheMealDB(callbacks.Plugin):
 
     def _score_meal(self, meal, terms):
         name = (meal.get("strMeal") or "").lower()
-        return sum(1 for t in terms if t in name)
+
+        ingredients = []
+        for i in range(1, 21):
+            ing = meal.get(f"strIngredient{i}")
+            if ing:
+                ingredients.append(ing.lower())
+
+        ingredient_text = " ".join(ingredients)
+
+        # --- anchor logic ---
+        anchor = terms[-1] if terms else ""
+        modifiers = terms[:-1] if len(terms) > 1 else []
+
+        score = 0
+
+        # HARD constraint: anchor must exist somewhere
+        if anchor in name:
+            score += 5
+        elif anchor in ingredient_text:
+            score += 3
+        else:
+            return -999  # reject unrelated meals
+
+        # soft scoring for modifiers
+        for t in modifiers:
+            if t in name:
+                score += 2
+            elif t in ingredient_text:
+                score += 1
+
+        return score
 
     def _formatMeal(self, meal, is_random=False):
         name = meal.get("strMeal", "Unknown")
@@ -171,7 +201,7 @@ class TheMealDB(callbacks.Plugin):
 
         meals = data.get("meals")
 
-        # ---- Smart multi-term search (ALWAYS for 2–3 words) ----
+        # ---- Smart multi-term search (2–3 words) ----
         if query and 2 <= len(query.split()) <= 3:
             terms = [t.lower() for t in query.split() if len(t) > 2]
 
@@ -180,12 +210,7 @@ class TheMealDB(callbacks.Plugin):
 
                 if merged:
                     merged.sort(key=lambda m: self._score_meal(m, terms), reverse=True)
-
-                    # Dynamic AND filtering
-                    min_score = min(len(terms), 2)
-                    strong = [m for m in merged if self._score_meal(m, terms) >= min_score]
-
-                    meals = strong if strong else merged
+                    meals = merged
 
         if not meals:
             irc.reply("❌ No recipe found.")
@@ -197,18 +222,19 @@ class TheMealDB(callbacks.Plugin):
             irc.replies(lines, prefixNick=False)
             return
 
-        # ---- Multiple results (SINGLE LINE OUTPUT) ----
-        meals = meals[:6]  # limit to avoid spam
+        # ---- Multiple results ----
+        meals = meals[:10]
         self._last_results[key] = meals
 
         items = [f"{i}. {m.get('strMeal')}" for i, m in enumerate(meals, 1)]
         joined = " | ".join(items)
 
-        # Optional: trim to avoid IRC length limits
         if len(joined) > 350:
             joined = joined[:350] + "..."
 
-        irc.reply(f"🔎 Found {len(meals)} recipes: {joined}  |  👉 Type: @recipe <number> to choose")
+        irc.reply(
+            f"🔎 Found {len(meals)} recipes: {joined}  |  👉 Type: @recipe <number> to choose"
+        )
 
     recipe = wrap(recipe, [optional('text')])
 

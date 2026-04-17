@@ -51,6 +51,30 @@ class TheMealDB(callbacks.Plugin):
             return "https://" + url[len("https://www."):]
         return url
 
+    def _search_multiple_terms(self, terms):
+        results = []
+        seen_ids = set()
+
+        for term in terms:
+            url = f"https://themealdb.com/api/json/v1/1/search.php?s={term}"
+            try:
+                data = requests.get(url, timeout=5).json()
+            except:
+                continue
+
+            meals = data.get("meals") or []
+            for m in meals:
+                meal_id = m.get("idMeal")
+                if meal_id not in seen_ids:
+                    seen_ids.add(meal_id)
+                    results.append(m)
+
+        return results
+
+    def _score_meal(self, meal, terms):
+        name = (meal.get("strMeal") or "").lower()
+        return sum(1 for t in terms if t in name)
+
     def _formatMeal(self, meal, is_random=False):
         name = meal.get("strMeal", "Unknown")
         category = meal.get("strCategory", "Unknown")
@@ -122,6 +146,13 @@ class TheMealDB(callbacks.Plugin):
             irc.replies(lines, prefixNick=False)
             return
 
+        # ---- Word limit check ----
+        if query:
+            words = query.split()
+            if len(words) > 3:
+                irc.reply("❌ Please use up to 3 words max.")
+                return
+
         # ---- Random or search ----
         is_random = False
 
@@ -139,6 +170,23 @@ class TheMealDB(callbacks.Plugin):
             return
 
         meals = data.get("meals")
+
+        # ---- Smart multi-term search (ALWAYS for 2–3 words) ----
+        if query and 2 <= len(query.split()) <= 3:
+            terms = [t.lower() for t in query.split() if len(t) > 2]
+
+            if terms:
+                merged = self._search_multiple_terms(terms)
+
+                if merged:
+                    merged.sort(key=lambda m: self._score_meal(m, terms), reverse=True)
+
+                    # Dynamic AND filtering
+                    min_score = min(len(terms), 2)
+                    strong = [m for m in merged if self._score_meal(m, terms) >= min_score]
+
+                    meals = strong if strong else merged
+
         if not meals:
             irc.reply("❌ No recipe found.")
             return
@@ -160,7 +208,7 @@ class TheMealDB(callbacks.Plugin):
         if len(joined) > 350:
             joined = joined[:350] + "..."
 
-        irc.reply(f"🔎 Found {len(meals)} recipes: {joined} 👉 Type: @recipe <number> to choose")
+        irc.reply(f"🔎 Found {len(meals)} recipes: {joined}  |  👉 Type: @recipe <number> to choose")
 
     recipe = wrap(recipe, [optional('text')])
 

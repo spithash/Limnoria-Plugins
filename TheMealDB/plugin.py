@@ -82,21 +82,18 @@ class TheMealDB(callbacks.Plugin):
 
         ingredient_text = " ".join(ingredients)
 
-        # --- anchor logic ---
         anchor = terms[-1] if terms else ""
         modifiers = terms[:-1] if len(terms) > 1 else []
 
         score = 0
 
-        # HARD constraint: anchor must exist somewhere
         if anchor in name:
             score += 5
         elif anchor in ingredient_text:
             score += 3
         else:
-            return -999  # reject unrelated meals
+            return -999
 
-        # soft scoring for modifiers
         for t in modifiers:
             if t in name:
                 score += 2
@@ -137,28 +134,31 @@ class TheMealDB(callbacks.Plugin):
         if instructions:
             extra.append(f"{ircutils.bold('👨‍🍳 Instructions:')} {instructions}")
 
+        # ---- MEDIA MERGE LINE ----
+        media_parts = []
+
         thumb = (meal.get("strMealThumb") or "").strip()
         if thumb:
             thumb = self._strip_www(thumb)
-            extra.append(f"{ircutils.bold('🖼️ Image:')} {thumb}")
+            media_parts.append(f"🖼️ {thumb}")
 
         youtube = (meal.get("strYoutube") or "").strip()
         if youtube:
             youtube = self._strip_www(youtube)
-            extra.append(f"{ircutils.bold('▶️ Video:')} {youtube}")
+            media_parts.append(f"▶️ {youtube}")
+
+        if media_parts:
+            extra.append(f"{ircutils.bold('📎 Media:')} " + " | ".join(media_parts))
 
         return [line1, line2] + extra
 
     def recipe(self, irc, msg, args, query):
-        """[<recipe name>|<number>]
-        Fetch a recipe by name, random, or select from previous results.
-        """
+        """[<recipe name>|<number>]"""
 
         channel = msg.args[0]
         nick = msg.nick
         key = (channel, nick)
 
-        # ---- Selection mode ----
         if query and query.isdigit():
             if key not in self._last_results:
                 irc.reply("❌ No active search. Try searching first.")
@@ -172,18 +172,15 @@ class TheMealDB(callbacks.Plugin):
                 return
 
             meal = meals[index]
-            lines = self._formatMeal(meal)
-            irc.replies(lines, prefixNick=False)
+            irc.replies(self._formatMeal(meal), prefixNick=False)
             return
 
-        # ---- Word limit check ----
         if query:
             words = query.split()
             if len(words) > 3:
                 irc.reply("❌ Please use up to 3 words max.")
                 return
 
-        # ---- Random or search ----
         is_random = False
 
         if not query or query.lower() in ("random", "rnd", "surprise"):
@@ -193,15 +190,13 @@ class TheMealDB(callbacks.Plugin):
             url = f"https://themealdb.com/api/json/v1/1/search.php?s={query}"
 
         try:
-            response = requests.get(url, timeout=5)
-            data = response.json()
+            data = requests.get(url, timeout=5).json()
         except Exception as e:
             irc.reply(f"❌ Error: {e}")
             return
 
         meals = data.get("meals")
 
-        # ---- Smart multi-term search (2–3 words) ----
         if query and 2 <= len(query.split()) <= 3:
             terms = [t.lower() for t in query.split() if len(t) > 2]
 
@@ -216,13 +211,10 @@ class TheMealDB(callbacks.Plugin):
             irc.reply("❌ No recipe found.")
             return
 
-        # ---- Single result ----
         if len(meals) == 1 or is_random:
-            lines = self._formatMeal(meals[0], is_random=is_random)
-            irc.replies(lines, prefixNick=False)
+            irc.replies(self._formatMeal(meals[0], is_random=is_random), prefixNick=False)
             return
 
-        # ---- Multiple results ----
         meals = meals[:10]
         self._last_results[key] = meals
 

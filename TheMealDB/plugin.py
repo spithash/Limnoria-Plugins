@@ -44,6 +44,13 @@ class TheMealDB(callbacks.Plugin):
         self.__parent.__init__(irc)
         self._last_results = {}  # (channel, nick) -> meals list
 
+    def _strip_www(self, url):
+        if url.startswith("http://www."):
+            return "http://" + url[len("http://www."):]
+        if url.startswith("https://www."):
+            return "https://" + url[len("https://www."):]
+        return url
+
     def _formatMeal(self, meal, is_random=False):
         name = meal.get("strMeal", "Unknown")
         category = meal.get("strCategory", "Unknown")
@@ -78,10 +85,12 @@ class TheMealDB(callbacks.Plugin):
 
         thumb = (meal.get("strMealThumb") or "").strip()
         if thumb:
+            thumb = self._strip_www(thumb)
             extra.append(f"{ircutils.bold('🖼️ Image:')} {thumb}")
 
         youtube = (meal.get("strYoutube") or "").strip()
         if youtube:
+            youtube = self._strip_www(youtube)
             extra.append(f"{ircutils.bold('▶️ Video:')} {youtube}")
 
         return [line1, line2] + extra

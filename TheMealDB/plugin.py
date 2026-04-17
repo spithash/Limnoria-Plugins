@@ -140,19 +140,22 @@ class TheMealDB(callbacks.Plugin):
             irc.replies(lines, prefixNick=False)
             return
 
-        # ---- Multiple results ----
+        # ---- Multiple results (SINGLE LINE OUTPUT) ----
         meals = meals[:6]  # limit to avoid spam
         self._last_results[key] = meals
 
-        irc.reply(f"🔎 Found {len(meals)} recipes:")
+        items = [f"{i}. {m.get('strMeal')}" for i, m in enumerate(meals, 1)]
+        joined = " | ".join(items)
 
-        for i, m in enumerate(meals, 1):
-            irc.reply(f"{i}. {m.get('strMeal')}")
+        # Optional: trim to avoid IRC length limits
+        if len(joined) > 350:
+            joined = joined[:350] + "..."
 
-        irc.reply("👉 Type: @recipe <number> to choose")
+        irc.reply(f"🔎 Found {len(meals)} recipes: {joined} 👉 Type: @recipe <number> to choose")
 
     recipe = wrap(recipe, [optional('text')])
 
 
 Class = TheMealDB
+
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:

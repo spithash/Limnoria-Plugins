@@ -120,7 +120,7 @@ class TheMealDB(callbacks.Plugin):
             url = "https://themealdb.com/api/json/v1/1/random.php"
             is_random = True
         else:
-            url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"
+            url = f"https://themealdb.com/api/json/v1/1/search.php?s={query}"
 
         try:
             response = requests.get(url, timeout=5)

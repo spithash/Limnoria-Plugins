@@ -117,7 +117,7 @@ class TheMealDB(callbacks.Plugin):
         is_random = False
 
         if not query or query.lower() in ("random", "rnd", "surprise"):
-            url = "https://www.themealdb.com/api/json/v1/1/random.php"
+            url = "https://themealdb.com/api/json/v1/1/random.php"
             is_random = True
         else:
             url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"

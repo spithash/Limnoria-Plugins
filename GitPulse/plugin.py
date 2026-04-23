@@ -412,7 +412,7 @@ class GitPulse(callbacks.Plugin):
             self.log_info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
-        """IRC command to subscribe current channel to a repository."""
+        """Command to subscribe current channel to a repository."""
         if not args:
             irc.reply("[GitPulse] Usage: subscribe owner/repo")
             return
@@ -433,7 +433,7 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"[GitPulse] Already subscribed to {repo} in channel {channel}.")
 
     def unsubscribe(self, irc, msg, args):
-        """IRC command to unsubscribe current channel from a repository."""
+        """Command to unsubscribe current channel from a repository."""
         if not args:
             irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
             return
@@ -456,7 +456,7 @@ class GitPulse(callbacks.Plugin):
         self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
 
     def listgitpulse(self, irc, msg, args):
-        """IRC command to list all repos subscribed in the current channel."""
+        """Command to list all repos subscribed in the current channel."""
         channel = msg.args[0]
         subscriptions = self.registryValue('subscriptions', channel)
         if isinstance(subscriptions, str):

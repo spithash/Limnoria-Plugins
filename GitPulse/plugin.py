@@ -28,37 +28,32 @@
 
 ###
 
-"""
-Plugin that monitors public GitHub repositories for activity using the GitHub Events & Commits API. Available commands are 'subscribe', 'unsubscribe', 'listgitpulse' and 'fetchgitpulse'
-"""
-
 import requests
 from threading import Thread, Event
 from datetime import datetime, timedelta, timezone
-import time
-
 from supybot import callbacks, ircmsgs
 from supybot.commands import wrap
 from colorama import Fore, Style, init
 
+# Initialize colorama to support colored terminal output and auto reset styles after each print
 init(autoreset=True)
 
-
 class GitPulse(callbacks.Plugin):
+    """Plugin that monitors public GitHub repositories for activity using the GitHub Events & Commits API. Available commands are 'subscribe', 'unsubscribe', 'listgitpulse' and 'fetchgitpulse'"""
 
     def __init__(self, irc):
         super().__init__(irc)
         self.irc = irc
-
         self.polling_started = False
         self.polling_thread = None
-        self.stop_polling_event = Event()
+        self.stop_polling_event = Event()  # Used to signal polling thread to stop
+        self.etags = {}  # Store ETag headers per repo to optimize GitHub API usage
+        self.last_modifieds = {}  # Store Last-Modified headers as fallback when no ETag
 
-        self.etags = {}
-        self.last_modifieds = {}
-
+        # Styles for coloring logs
         self.TAG = Style.BRIGHT + Fore.WHITE + "[GitPulse]" + Style.RESET_ALL
 
+        # Different colors for log levels to make output easy to scan
         self.LEVEL_COLORS = {
             "DEBUG": Fore.MAGENTA + Style.BRIGHT,
             "INFO": Fore.GREEN + Style.BRIGHT,
@@ -67,280 +62,429 @@ class GitPulse(callbacks.Plugin):
         }
         self.RESET_COLOR = Style.RESET_ALL
 
-        # IRC formatting
-        self.B = '\x02'
-        self.C = '\x03'
-        self.RESET = '\x0f'
-        self.GREEN = '03'
-        self.BLUE = '12'
-        self.RED = '04'
-        self.YELLOW = '08'
-
+        # Start the background polling loop
         self.start_polling()
 
-    # ---------------- LOGGING (fixed + stable) ----------------
+        # IRC formatting codes for messages
+        self.B = '\x02'     # Bold
+        self.C = '\x03'     # IRC color code prefix
+        self.RESET = '\x0f' # Reset IRC formatting
+        self.GREEN = '03'   # Green
+        self.BLUE = '12'    # Blue
+        self.RED = '04'     # Red
+        self.YELLOW = '08'  # Yellow
 
     def get_timestamp(self):
-        return Fore.CYAN + datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S') + Style.RESET_ALL
+        """Get current UTC time in ISO8601 format with bright cyan color for console logs."""
+        now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')
+        return Fore.CYAN + Style.BRIGHT + now + Style.RESET_ALL
 
-    def _log(self, level, message):
-        ts = self.get_timestamp()
-        print(f"{ts} {self.TAG} {self.LEVEL_COLORS[level]}[{level}]{self.RESET_COLOR} {message}")
+    def log_debug(self, message):
+        """Log a debug-level message with timestamp and colors."""
+        timestamp = self.get_timestamp()
+        level = "DEBUG"
+        print(f"{timestamp} {self.TAG} {self.LEVEL_COLORS[level]}[{level}]{self.RESET_COLOR} {message}")
 
-    def log_debug(self, m): self._log("DEBUG", m)
-    def log_info(self, m): self._log("INFO", m)
-    def log_warning(self, m): self._log("WARNING", m)
-    def log_error(self, m): self._log("ERROR", m)
+    def log_info(self, message):
+        """Log an info-level message with timestamp and colors."""
+        timestamp = self.get_timestamp()
+        level = "INFO"
+        print(f"{timestamp} {self.TAG} {self.LEVEL_COLORS[level]}[{level}]{self.RESET_COLOR} {message}")
 
-    # ---------------- THREAD CONTROL ----------------
+    def log_warning(self, message):
+        """Log a warning-level message with timestamp and colors."""
+        timestamp = self.get_timestamp()
+        level = "WARNING"
+        print(f"{timestamp} {self.TAG} {self.LEVEL_COLORS[level]}[{level}]{self.RESET_COLOR} {message}")
+
+    def log_error(self, message):
+        """Log an error-level message with timestamp and colors."""
+        timestamp = self.get_timestamp()
+        level = "ERROR"
+        print(f"{timestamp} {self.TAG} {self.LEVEL_COLORS[level]}[{level}]{self.RESET_COLOR} {message}")
 
     def start_polling(self):
+        """Starts the background thread that polls GitHub for repository events."""
         if not self.polling_started:
             self.polling_started = True
             self.log_info("Starting polling thread for GitHub events.")
-
             self.polling_thread = Thread(target=self.poll, daemon=True)
             self.polling_thread.start()
 
-            Thread(target=self._watchdog, daemon=True).start()
-
     def stop_polling(self):
+        """Signals the polling thread to stop and waits for it to finish."""
         self.stop_polling_event.set()
         if self.polling_thread:
-            self.polling_thread.join()
+            self.polling_thread.join(timeout=5)
         self.log_info("Polling thread stopped.")
 
-    def _watchdog(self):
-        while not self.stop_polling_event.is_set():
-            if self.polling_thread and not self.polling_thread.is_alive():
-                self.log_error("Polling thread died — restarting")
-                self.polling_started = False
-                self.start_polling()
-            time.sleep(30)
-
-    # ---------------- POLLING LOOP ----------------
-
     def poll(self):
+        """Background loop that polls subscribed repos at configured intervals."""
         while not self.stop_polling_event.is_set():
             try:
-                self.log_info("Polling for GitHub updates...")
+                self.log_info("Polling for events...")
 
-                for channel in list(self.irc.state.channels):
+                # Iterate through all channels and their repo subscriptions
+                # Get fresh channel list each time through the loop
+                channels = list(self.irc.state.channels.keys()) if self.irc.state.channels else []
+                
+                for channel in channels:
                     try:
-                        subs = self.registryValue('subscriptions', channel)
-                        if isinstance(subs, str):
-                            subs = subs.split()
+                        subscriptions = self.registryValue('subscriptions', channel)
+                        if isinstance(subscriptions, str):
+                            subscriptions = subscriptions.split()
 
-                        for repo in subs:
+                        for repo in subscriptions:
                             try:
                                 self.fetch_and_announce(repo, self.irc, None, channel)
                             except Exception as e:
-                                self.log_error(f"{repo}: {e}")
-
+                                self.log_error(f"Error fetching {repo} in {channel}: {e}")
                     except Exception as e:
-                        self.log_error(f"Channel error {channel}: {e}")
+                        self.log_error(f"Error processing channel {channel}: {e}")
 
                 interval = self.registryValue('pollInterval')
+                self.log_info(f"Waiting for {interval} seconds before next poll.")
+                # Wait for interval seconds or until stop signal
                 self.stop_polling_event.wait(interval)
-
+                
             except Exception as e:
-                self.log_error(f"FATAL poll error: {e}")
-                self.stop_polling_event.wait(10)
-
-    # ---------------- HTTP ----------------
-
-    def _request(self, url, headers):
-        try:
-            return requests.get(url, headers=headers, timeout=15)
-        except Exception as e:
-            self.log_error(f"HTTP error: {e}")
-            return None
-
-    # ---------------- EVENTS ----------------
+                self.log_error(f"Unexpected error in poll loop: {e}")
+                # Wait a bit before retrying to avoid tight error loops
+                self.stop_polling_event.wait(60)
 
     def fetch_and_announce(self, repo, irc, msg, channel):
+        self.log_debug(f"Fetching events for repository: {repo}")
         token = self.registryValue('githubToken')
         headers = {'Cache-Control': 'no-cache'}
         if token:
             headers['Authorization'] = f'token {token}'
 
-        key = f"{channel}::{repo}::events"
+        # Use ETag if available
+        etag_sent = self.etags.get(f"{channel}::{repo}::events")
+        if etag_sent:
+            headers['If-None-Match'] = etag_sent
+        else:
+            # Fallback to Last-Modified if no ETag
+            last_modified_sent = self.last_modifieds.get(f"{channel}::{repo}::events")
+            if last_modified_sent:
+                headers['If-Modified-Since'] = last_modified_sent
 
-        if key in self.etags:
-            headers['If-None-Match'] = self.etags[key]
-        elif key in self.last_modifieds:
-            headers['If-Modified-Since'] = self.last_modifieds[key]
+        url = f"https://api.github.com/repos/{repo}/events"
+        try:
+            resp = requests.get(url, headers=headers)
+        except Exception as e:
+            self.log_error(f"HTTP request failed for {repo}: {e}")
+            return
 
-        resp = self._request(f"https://api.github.com/repos/{repo}/events", headers)
-        if not resp:
+        etag_received = resp.headers.get('ETag')
+        last_modified_received = resp.headers.get('Last-Modified')
+
+        rate_limit = resp.headers.get('X-RateLimit-Limit')
+        rate_remaining = resp.headers.get('X-RateLimit-Remaining')
+        rate_used = resp.headers.get('X-RateLimit-Used')
+        rate_reset = resp.headers.get('X-RateLimit-Reset')
+
+        reset_time_str = "unknown"
+        try:
+            if rate_reset:
+                reset_time_str = datetime.utcfromtimestamp(int(rate_reset)).isoformat()
+        except Exception as e:
+            self.log_warning(f"Could not parse rate reset time: {e}")
+
+        repo_c = Fore.CYAN + repo + Style.RESET_ALL
+        rate_used_c = Fore.MAGENTA + (rate_used if rate_used else "N/A") + Style.RESET_ALL
+        rate_remaining_c = Fore.GREEN + (rate_remaining if rate_remaining else "N/A") + Style.RESET_ALL
+        rate_limit_c = Fore.YELLOW + (rate_limit if rate_limit else "N/A") + Style.RESET_ALL
+        etag_sent_c = Fore.BLUE + (etag_sent if etag_sent else "None") + Style.RESET_ALL
+        etag_received_c = Fore.BLUE + (etag_received if etag_received else "None") + Style.RESET_ALL
+        reset_time_c = Fore.CYAN + reset_time_str + Style.RESET_ALL
+
+        self.log_info(
+            f"Repo: {repo_c} | Status: {resp.status_code} | "
+            f"Rate: Used {rate_used_c}, Remaining {rate_remaining_c}/{rate_limit_c} | "
+            f"Resets at {reset_time_c} UTC | "
+            f"ETag sent: {etag_sent_c} | ETag received: {etag_received_c}"
+        )
+
+        if rate_remaining is not None and int(rate_remaining) < 100:
+            self.log_warning(f"Rate limit nearly exhausted ({rate_remaining} remaining). Skipping fetch for {repo_c}. Resets at {reset_time_c} UTC")
             return
 
         if resp.status_code == 304:
-            self.fetch_commits(repo, irc, msg, channel)
+            self.log_info(f"No new data (304 Not Modified) for {repo_c}")
+            self.fetch_and_announce_commits(repo, irc, msg, channel)
             return
 
         if resp.status_code != 200:
-            self.log_error(f"{repo} HTTP {resp.status_code}")
+            self.log_error(f"Failed to fetch events for {repo_c}: HTTP {resp.status_code}")
             return
 
-        self.etags[key] = resp.headers.get('ETag')
-        self.last_modifieds[key] = resp.headers.get('Last-Modified')
+        # Save ETag and Last-Modified if provided
+        if etag_received:
+            self.etags[f"{channel}::{repo}::events"] = etag_received
+        if last_modified_received:
+            self.last_modifieds[f"{channel}::{repo}::events"] = last_modified_received
 
         try:
             events = resp.json()
         except Exception as e:
-            self.log_error(f"JSON error: {e}")
+            self.log_error(f"Failed to parse JSON response: {e}")
             return
 
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        self.log_debug(f"Fetched {len(events)} events for {repo_c}")
 
-        for e in reversed(events):
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=5)
+
+        for event in reversed(events):
             try:
-                t = datetime.strptime(e['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                if t < cutoff:
-                    continue
+                event_timestamp = datetime.strptime(event['created_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+            except Exception as e:
+                self.log_warning(f"Skipping event due to invalid timestamp: {e}")
+                continue
 
-                if e['type'] == 'PullRequestEvent':
-                    msg_text = self.format_pr(e, repo)
-                elif e['type'] == 'IssuesEvent':
-                    msg_text = self.format_issue(e, repo)
-                else:
-                    continue
+            if event_timestamp < cutoff:
+                continue
 
+            if event['type'] == 'PullRequestEvent':
+                msg_text = self.format_pull_request_event(event, repo)
                 if msg_text:
+                    self.log_info(f"Posting PullRequestEvent: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
 
-            except Exception as ex:
-                self.log_warning(f"Event parse error: {ex}")
+            elif event['type'] == 'IssuesEvent':
+                msg_text = self.format_issues_event(event, repo)
+                if msg_text:
+                    self.log_info(f"Posting IssuesEvent: {msg_text}")
+                    self.announce(msg_text, irc, msg, channel)
 
-        self.fetch_commits(repo, irc, msg, channel)
+        self.fetch_and_announce_commits(repo, irc, msg, channel)
 
-    # ---------------- COMMITS ----------------
 
-    def fetch_commits(self, repo, irc, msg, channel):
-        headers = {'Cache-Control': 'no-cache'}
-
+    def fetch_and_announce_commits(self, repo, irc, msg, channel):
+        self.log_debug(f"Fetching commits for repository: {repo}")
         token = self.registryValue('githubToken')
+        headers = {'Cache-Control': 'no-cache'}
         if token:
             headers['Authorization'] = f'token {token}'
 
-        key = f"{channel}::{repo}::commits"
+        etag_sent = self.etags.get(f"{channel}::{repo}::commits")
+        if etag_sent:
+            headers['If-None-Match'] = etag_sent
+        else:
+            last_modified_sent = self.last_modifieds.get(f"{channel}::{repo}::commits")
+            if last_modified_sent:
+                headers['If-Modified-Since'] = last_modified_sent
 
-        if key in self.etags:
-            headers['If-None-Match'] = self.etags[key]
+        url = f"https://api.github.com/repos/{repo}/commits"
+        try:
+            resp = requests.get(url, headers=headers)
+        except Exception as e:
+            self.log_error(f"HTTP request failed for commits of {repo}: {e}")
+            return
 
-        resp = self._request(f"https://api.github.com/repos/{repo}/commits", headers)
-        if not resp:
+        etag_received = resp.headers.get('ETag')
+        last_modified_received = resp.headers.get('Last-Modified')
+
+        rate_limit = resp.headers.get('X-RateLimit-Limit')
+        rate_remaining = resp.headers.get('X-RateLimit-Remaining')
+        rate_used = resp.headers.get('X-RateLimit-Used')
+        rate_reset = resp.headers.get('X-RateLimit-Reset')
+
+        reset_time_str = "unknown"
+        try:
+            if rate_reset:
+                reset_time_str = datetime.utcfromtimestamp(int(rate_reset)).isoformat()
+        except Exception as e:
+            self.log_warning(f"Could not parse commit rate reset time: {e}")
+
+        repo_c = Fore.CYAN + repo + Style.RESET_ALL
+        rate_used_c = Fore.MAGENTA + (rate_used if rate_used else "N/A") + Style.RESET_ALL
+        rate_remaining_c = Fore.GREEN + (rate_remaining if rate_remaining else "N/A") + Style.RESET_ALL
+        rate_limit_c = Fore.YELLOW + (rate_limit if rate_limit else "N/A") + Style.RESET_ALL
+        etag_sent_c = Fore.BLUE + (etag_sent if etag_sent else "None") + Style.RESET_ALL
+        etag_received_c = Fore.BLUE + (etag_received if etag_received else "None") + Style.RESET_ALL
+        reset_time_c = Fore.CYAN + reset_time_str + Style.RESET_ALL
+
+        self.log_info(
+            f"Repo: {repo_c} | Commits API Status: {resp.status_code} | "
+            f"Rate: Used {rate_used_c}, Remaining {rate_remaining_c}/{rate_limit_c} | "
+            f"Resets at {reset_time_c} UTC | "
+            f"ETag sent: {etag_sent_c} | ETag received: {etag_received_c}"
+        )
+
+        if rate_remaining is not None and int(rate_remaining) < 100:
+            self.log_warning(f"Rate limit nearly exhausted ({rate_remaining} remaining). Skipping commits fetch for {repo_c}. Resets at {reset_time_c} UTC")
+            return
+
+        if resp.status_code == 304:
+            self.log_info(f"No new commits (304 Not Modified) for {repo_c}")
             return
 
         if resp.status_code != 200:
+            self.log_error(f"Failed to fetch commits for {repo_c}: HTTP {resp.status_code}")
             return
 
-        self.etags[key] = resp.headers.get('ETag')
+        if etag_received:
+            self.etags[f"{channel}::{repo}::commits"] = etag_received
+        if last_modified_received:
+            self.last_modifieds[f"{channel}::{repo}::commits"] = last_modified_received
 
         try:
             commits = resp.json()
-        except:
+        except Exception as e:
+            self.log_error(f"Failed to parse commits JSON: {e}")
             return
 
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=5)
 
-        for c in reversed(commits):
+        for commit in reversed(commits):
             try:
-                t = datetime.strptime(c['commit']['committer']['date'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                if t < cutoff:
+                commit_time = datetime.strptime(commit['commit']['committer']['date'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                if commit_time < cutoff:
                     continue
-
                 event = {
-                    'actor': {'login': c['commit']['committer']['name']},
+                    'actor': {'login': commit['commit']['committer']['name']},
                     'payload': {
-                        'commits': [{'message': c['commit']['message'], 'sha': c['sha']}],
+                        'commits': [{'message': commit['commit']['message'], 'sha': commit['sha']}],
                         'ref': 'refs/heads/main'
                     }
                 }
-
-                msg_text = self.format_push(event, repo)
+                msg_text = self.format_push_event(event, repo)
                 if msg_text:
+                    self.log_info(f"Posting commit: {msg_text}")
                     self.announce(msg_text, irc, msg, channel)
-
             except Exception as e:
-                self.log_warning(f"Commit parse error: {e}")
+                self.log_warning(f"Error parsing commit: {e}")
 
-    # ---------------- FORMATTERS ----------------
+    def format_push_event(self, event, repo):
+        """Format a push event into a nicely colored IRC message."""
+        actor = event['actor']['login']
+        commits = event['payload'].get('commits', [])
+        branch = event['payload']['ref'].split('/')[-1]
 
-    def format_push(self, e, repo):
-        actor = e['actor']['login']
-        msgs = []
-        for c in e['payload']['commits']:
-            msg = c['message'].split('\n')[0]
-            url = f"https://github.com/{repo}/commit/{c['sha']}"
-            msgs.append(f"{self.B}{actor}{self.B} pushed {msg} → {url}")
-        return "\n".join(msgs)
+        if commits:
+            msgs = []
+            for c in commits:
+                # Only use the first line of commit message for brevity
+                msg = c['message'].split('\n')[0]
+                url = f"https://github.com/{repo}/commit/{c['sha']}"
+                # IRC color codes for emphasis
+                msgs.append(f"{self.B}{actor}{self.B} pushed: {self.C}{self.GREEN}branch: {self.B}{branch}{self.RESET} {msg}{self.RESET} to {self.B}{repo}{self.B}: {self.C}{self.BLUE}{url}{self.RESET}")
+            return '\n'.join(msgs)
+        return None
 
-    def format_pr(self, e, repo):
-        pr = e['payload']['pull_request']
-        return f"{self.B}{e['actor']['login']}{self.B} PR: {pr['title']} → {pr['html_url']}"
+    def format_pull_request_event(self, event, repo):
+        """Format a pull request event into a colored IRC message."""
+        actor = event['actor']['login']
+        pr = event['payload']['pull_request']
+        pr_url = pr['html_url']
+        pr_title = pr['title']
+        action = event['payload']['action']
+        branch = pr['head']['ref']
 
-    def format_issue(self, e, repo):
-        issue = e['payload']['issue']
-        return f"{self.B}{e['actor']['login']}{self.B} Issue: {issue['title']} → {issue['html_url']}"
+        # Highlight action differently if newly opened
+        action_text = f"{self.C}{self.GREEN}opened{self.RESET}" if action == 'opened' else f"{self.C}{self.BLUE}{action}{self.RESET}"
+        return f"{self.B}{actor}{self.B} {action_text} pull request: {self.C}{self.RED}{pr_title}{self.RESET} on branch {self.B}{branch}{self.B}: {self.C}{self.BLUE}{pr_url}{self.RESET}"
 
-    # ---------------- IRC ----------------
+    def format_issues_event(self, event, repo):
+        """Format an issue event into a colored IRC message."""
+        actor = event['actor']['login']
+        issue = event['payload']['issue']
+        issue_url = issue['html_url']
+        issue_title = issue['title']
+        action = event['payload']['action']
+        issue_state = issue['state']
+
+        # Different color for opened vs closed issues
+        state_text = f"{self.C}{self.RED}opened{self.RESET}" if issue_state == 'open' else f"{self.C}{self.GREEN}closed{self.RESET}"
+        return f"{self.B}{actor}{self.B} {self.C}{self.RED}issue{self.RESET} {state_text}: {self.C}{self.RED}{issue_title}{self.RESET} {self.C}{self.BLUE}{issue_url}{self.RESET}"
 
     def announce(self, message, irc, msg, channel):
-        for line in message.split("\n"):
+        """Send message lines to the specified IRC channel."""
+        if not channel:
+            self.log_warning("No channel specified for announcement.")
+            return
+        for line in message.split('\n'):
             irc.sendMsg(ircmsgs.privmsg(channel, line))
-
-    # ---------------- COMMANDS ----------------
+            # TODO: The line below may be redundant 
+            self.log_info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
+        """IRC command to subscribe current channel to a repository."""
+        if not args:
+            irc.reply("[GitPulse] Usage: subscribe owner/repo")
+            return
+
         repo = args[0]
         channel = msg.args[0]
+        subscriptions = self.registryValue('subscriptions', channel)
+        if isinstance(subscriptions, str):
+            subscriptions = subscriptions.split()
 
-        subs = self.registryValue('subscriptions', channel)
-        if isinstance(subs, str):
-            subs = subs.split()
-
-        if repo not in subs:
-            subs.append(repo)
-            self.setRegistryValue('subscriptions', ' '.join(subs), channel)
-            irc.reply(f"Subscribed to {repo}")
+        if repo not in subscriptions:
+            subscriptions.append(repo)
+            self.save_subscriptions(channel, subscriptions)
+            irc.reply(f"[GitPulse] Subscribed to {repo} in channel {channel}.")
+            # Fetch immediately after subscribing
+            self.fetch_and_announce(repo, irc, msg, channel)
+        else:
+            irc.reply(f"[GitPulse] Already subscribed to {repo} in channel {channel}.")
 
     def unsubscribe(self, irc, msg, args):
+        """IRC command to unsubscribe current channel from a repository."""
+        if not args:
+            irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
+            return
+
         repo = args[0]
         channel = msg.args[0]
+        subscriptions = self.registryValue('subscriptions', channel)
+        if isinstance(subscriptions, str):
+            subscriptions = subscriptions.split()
 
-        subs = self.registryValue('subscriptions', channel)
-        if isinstance(subs, str):
-            subs = subs.split()
+        if repo in subscriptions:
+            subscriptions.remove(repo)
+            self.save_subscriptions(channel, subscriptions)
+            irc.reply(f"[GitPulse] Unsubscribed from {repo} in channel {channel}.")
+        else:
+            irc.reply(f"[GitPulse] Not subscribed to {repo} in channel {channel}.")
 
-        if repo in subs:
-            subs.remove(repo)
-            self.setRegistryValue('subscriptions', ' '.join(subs), channel)
-            irc.reply(f"Unsubscribed from {repo}")
+    def save_subscriptions(self, channel, subscriptions):
+        """Save updated subscription list back to the registry."""
+        self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
 
     def listgitpulse(self, irc, msg, args):
+        """IRC command to list all repos subscribed in the current channel."""
         channel = msg.args[0]
-        subs = self.registryValue('subscriptions', channel)
-        if isinstance(subs, str):
-            subs = subs.split()
+        subscriptions = self.registryValue('subscriptions', channel)
+        if isinstance(subscriptions, str):
+            subscriptions = subscriptions.split()
+        if subscriptions:
+            irc.reply(f"[GitPulse] Subscribed to the following repositories in {channel}: {', '.join(subscriptions)}")
+        else:
+            irc.reply(f"[GitPulse] No repositories subscribed to in {channel}.")
 
-        irc.reply(f"Repos: {', '.join(subs) if subs else 'none'}")
-
+    # This trigger command is owners only.
     @wrap(['owner'])
     def fetchgitpulse(self, irc, msg, args):
-        """Manually trigger fetching GitHub events for all repos subscribed in the current channel."""
+        """Manually trigger fetching GitHub events for all repos subscribed in the channel."""
         channel = msg.args[0]
-        subs = self.registryValue('subscriptions', channel)
-        if isinstance(subs, str):
-            subs = subs.split()
+        subscriptions = self.registryValue('subscriptions', channel)
+        if isinstance(subscriptions, str):
+            subscriptions = subscriptions.split()
+        if not subscriptions:
+            irc.reply(f"[GitPulse] No repositories subscribed to in {channel}.")
+            return
 
-        for repo in subs:
+        irc.reply(f"[GitPulse] Manually fetching updates for {len(subscriptions)} repositories...")
+        for repo in subscriptions:
             self.fetch_and_announce(repo, irc, msg, channel)
 
     def die(self):
+        """Cleanup on plugin shutdown."""
         self.stop_polling()
         super().die()
-
 
 Class = GitPulse

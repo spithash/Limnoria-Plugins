@@ -37,78 +37,16 @@ _ = PluginInternationalization('TheMealDB')
 
 
 class TheMealDB(callbacks.Plugin):
-    """Fetches recipes from TheMealDB API"""
+    """Fetches recipes from TheMealDB API. If no search is provided, it will show a random."""
 
-    def __init__(self, irc):
-        self.__parent = super(TheMealDB, self)
-        self.__parent.__init__(irc)
-        self._last_results = {}  # (channel, nick) -> meals list
-
-    def _strip_www(self, url):
-        if url.startswith("http://www."):
-            return "http://" + url[len("http://www."):]
-        if url.startswith("https://www."):
-            return "https://" + url[len("https://www."):]
-        return url
-
-    def _search_multiple_terms(self, terms):
-        results = []
-        seen_ids = set()
-
-        for term in terms:
-            url = f"https://themealdb.com/api/json/v1/1/search.php?s={term}"
-            try:
-                data = requests.get(url, timeout=5).json()
-            except:
-                continue
-
-            meals = data.get("meals") or []
-            for m in meals:
-                meal_id = m.get("idMeal")
-                if meal_id not in seen_ids:
-                    seen_ids.add(meal_id)
-                    results.append(m)
-
-        return results
-
-    def _score_meal(self, meal, terms):
-        name = (meal.get("strMeal") or "").lower()
-
-        ingredients = []
-        for i in range(1, 21):
-            ing = meal.get(f"strIngredient{i}")
-            if ing:
-                ingredients.append(ing.lower())
-
-        ingredient_text = " ".join(ingredients)
-
-        anchor = terms[-1] if terms else ""
-        modifiers = terms[:-1] if len(terms) > 1 else []
-
-        score = 0
-
-        if anchor in name:
-            score += 5
-        elif anchor in ingredient_text:
-            score += 3
-        else:
-            return -999
-
-        for t in modifiers:
-            if t in name:
-                score += 2
-            elif t in ingredient_text:
-                score += 1
-
-        return score
-
-    def _formatMeal(self, meal, is_random=False):
+    def _formatMeal(self, meal):
         name = meal.get("strMeal", "Unknown")
         category = meal.get("strCategory", "Unknown")
         area = meal.get("strArea", "Unknown")
 
         instructions = (meal.get("strInstructions") or "").replace("\r\n", " ").strip()
 
+        # ---- Collect ALL ingredients ----
         ingredients = []
         for i in range(1, 21):
             ing = meal.get(f"strIngredient{i}")
@@ -118,115 +56,59 @@ class TheMealDB(callbacks.Plugin):
                 meas = (meas or "").strip()
                 ingredients.append(f"{meas} {ing.strip()}".strip())
 
-        title_text = name
-        if is_random:
-            title_text = f"🔁 (random) {title_text}"
-
-        title = ircutils.bold(f"🍽️ {title_text}")
+        # ---- Header ----
+        title = ircutils.bold(f"🍽️ {name}")
         meta = f"({category}, {area})"
         line1 = f"{title} {meta}"
 
+        # ---- Ingredients (ONE line) ----
         ing_label = ircutils.bold("🧂 Ingredients:")
         line2 = f"{ing_label} " + ", ".join(ingredients)
 
+        # ---- Extra section ----
         extra = []
 
         if instructions:
             extra.append(f"{ircutils.bold('👨‍🍳 Instructions:')} {instructions}")
 
-        # ---- MEDIA MERGE LINE ----
-        media_parts = []
-
         thumb = (meal.get("strMealThumb") or "").strip()
         if thumb:
-            thumb = self._strip_www(thumb)
-            media_parts.append(f"🖼️ {thumb}")
+            extra.append(f"{ircutils.bold('🖼️ Image:')} {thumb}")
 
         youtube = (meal.get("strYoutube") or "").strip()
         if youtube:
-            youtube = self._strip_www(youtube)
-            media_parts.append(f"▶️ {youtube}")
-
-        if media_parts:
-            extra.append(f"{ircutils.bold('📎 Media:')} " + " | ".join(media_parts))
+            extra.append(f"{ircutils.bold('▶️ Video:')} {youtube}")
 
         return [line1, line2] + extra
 
     def recipe(self, irc, msg, args, query):
-        """[<recipe name>|<number>]"""
+        """[<recipe name>]
+        Fetch a recipe by name, or a random one if no name is given.
+        """
 
-        channel = msg.args[0]
-        nick = msg.nick
-        key = (channel, nick)
-
-        if query and query.isdigit():
-            if key not in self._last_results:
-                irc.reply("❌ No active search. Try searching first.")
-                return
-
-            meals = self._last_results[key]
-            index = int(query) - 1
-
-            if index < 0 or index >= len(meals):
-                irc.reply("❌ Invalid selection.")
-                return
-
-            meal = meals[index]
-            irc.replies(self._formatMeal(meal), prefixNick=False)
-            return
-
-        if query:
-            words = query.split()
-            if len(words) > 3:
-                irc.reply("❌ Please use up to 3 words max.")
-                return
-
-        is_random = False
-
+        # ---- Decide endpoint ----
         if not query or query.lower() in ("random", "rnd", "surprise"):
-            url = "https://themealdb.com/api/json/v1/1/random.php"
-            is_random = True
+            url = "https://www.themealdb.com/api/json/v1/1/random.php"
         else:
-            url = f"https://themealdb.com/api/json/v1/1/search.php?s={query}"
+            url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"
 
         try:
-            data = requests.get(url, timeout=5).json()
+            response = requests.get(url, timeout=5)
+            data = response.json()
         except Exception as e:
             irc.reply(f"❌ Error: {e}")
             return
 
         meals = data.get("meals")
-
-        if query and 2 <= len(query.split()) <= 3:
-            terms = [t.lower() for t in query.split() if len(t) > 2]
-
-            if terms:
-                merged = self._search_multiple_terms(terms)
-
-                if merged:
-                    merged.sort(key=lambda m: self._score_meal(m, terms), reverse=True)
-                    meals = merged
-
         if not meals:
             irc.reply("❌ No recipe found.")
             return
 
-        if len(meals) == 1 or is_random:
-            irc.replies(self._formatMeal(meals[0], is_random=is_random), prefixNick=False)
-            return
+        meal = meals[0]
+        lines = self._formatMeal(meal)
 
-        meals = meals[:10]
-        self._last_results[key] = meals
-
-        items = [f"{i}. {m.get('strMeal')}" for i, m in enumerate(meals, 1)]
-        joined = " | ".join(items)
-
-        if len(joined) > 350:
-            joined = joined[:350] + "..."
-
-        irc.reply(
-            f"🔎 Found {len(meals)} recipes: {joined}  |  👉 Type: @recipe <number> to choose"
-        )
+        # Proper Limnoria multi-line output (supports "more")
+        irc.replies(lines, prefixNick=False)
 
     recipe = wrap(recipe, [optional('text')])
 

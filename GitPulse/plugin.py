@@ -115,27 +115,42 @@ class GitPulse(callbacks.Plugin):
         """Signals the polling thread to stop and waits for it to finish."""
         self.stop_polling_event.set()
         if self.polling_thread:
-            self.polling_thread.join()
+            self.polling_thread.join(timeout=5)
         self.log_info("Polling thread stopped.")
 
     def poll(self):
         """Background loop that polls subscribed repos at configured intervals."""
         while not self.stop_polling_event.is_set():
-            self.log_info("Polling for events...")
+            try:
+                self.log_info("Polling for events...")
 
-            # Iterate through all channels and their repo subscriptions
-            for channel in self.irc.state.channels:
-                subscriptions = self.registryValue('subscriptions', channel)
-                if isinstance(subscriptions, str):
-                    subscriptions = subscriptions.split()
+                # Iterate through all channels and their repo subscriptions
+                # Get fresh channel list each time through the loop
+                channels = list(self.irc.state.channels.keys()) if self.irc.state.channels else []
+                
+                for channel in channels:
+                    try:
+                        subscriptions = self.registryValue('subscriptions', channel)
+                        if isinstance(subscriptions, str):
+                            subscriptions = subscriptions.split()
 
-                for repo in subscriptions:
-                    self.fetch_and_announce(repo, self.irc, None, channel)
+                        for repo in subscriptions:
+                            try:
+                                self.fetch_and_announce(repo, self.irc, None, channel)
+                            except Exception as e:
+                                self.log_error(f"Error fetching {repo} in {channel}: {e}")
+                    except Exception as e:
+                        self.log_error(f"Error processing channel {channel}: {e}")
 
-            interval = self.registryValue('pollInterval')
-            self.log_info(f"Waiting for {interval} seconds before next poll.")
-            # Wait for interval seconds or until stop signal
-            self.stop_polling_event.wait(interval)
+                interval = self.registryValue('pollInterval')
+                self.log_info(f"Waiting for {interval} seconds before next poll.")
+                # Wait for interval seconds or until stop signal
+                self.stop_polling_event.wait(interval)
+                
+            except Exception as e:
+                self.log_error(f"Unexpected error in poll loop: {e}")
+                # Wait a bit before retrying to avoid tight error loops
+                self.stop_polling_event.wait(60)
 
     def fetch_and_announce(self, repo, irc, msg, channel):
         self.log_debug(f"Fetching events for repository: {repo}")
@@ -397,7 +412,7 @@ class GitPulse(callbacks.Plugin):
             self.log_info(f"Posted message to channel {channel}: {line}")
 
     def subscribe(self, irc, msg, args):
-        """IRC command to subscribe current channel to a repository."""
+        """Command to subscribe current channel to a repository."""
         if not args:
             irc.reply("[GitPulse] Usage: subscribe owner/repo")
             return
@@ -418,7 +433,7 @@ class GitPulse(callbacks.Plugin):
             irc.reply(f"[GitPulse] Already subscribed to {repo} in channel {channel}.")
 
     def unsubscribe(self, irc, msg, args):
-        """IRC command to unsubscribe current channel from a repository."""
+        """Command to unsubscribe current channel from a repository."""
         if not args:
             irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
             return
@@ -441,7 +456,7 @@ class GitPulse(callbacks.Plugin):
         self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
 
     def listgitpulse(self, irc, msg, args):
-        """IRC command to list all repos subscribed in the current channel."""
+        """Command to list all repos subscribed in the current channel."""
         channel = msg.args[0]
         subscriptions = self.registryValue('subscriptions', channel)
         if isinstance(subscriptions, str):
@@ -473,4 +488,3 @@ class GitPulse(callbacks.Plugin):
         super().die()
 
 Class = GitPulse
-

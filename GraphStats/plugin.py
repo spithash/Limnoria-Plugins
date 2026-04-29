@@ -155,7 +155,7 @@ class GraphStats(callbacks.Plugin):
             return
 
         channel = msg.args[0]
-        network = irc.network
+        network = irc.network.lower()
 
         cooldown = 600  # 10 minutes cooldown
         now = time.time()

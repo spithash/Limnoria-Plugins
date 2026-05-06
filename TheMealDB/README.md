@@ -1,1 +1,1 @@
-Fetches a recipe from TheMealDB API
+Fetches recipes from TheMealDB API

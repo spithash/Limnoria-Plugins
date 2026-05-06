@@ -29,7 +29,7 @@
 ###
 
 """
-TheMealDB: Fetches a recipe from TheMealDB API
+TheMealDB: Fetches recipes from TheMealDB API
 """
 
 import sys

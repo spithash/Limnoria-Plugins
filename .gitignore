@@ -2,3 +2,7 @@ __pycache__/
 local/
 Troll/
 KirkHunt/
+*.key
+*.pem
+*.log
+*.pyc

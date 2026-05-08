@@ -45,15 +45,11 @@ class BotNet(callbacks.Plugin):
     def __init__(self, irc):
         super().__init__(irc)
 
-        # identity system
         self.identity = load_identity()
         self.pubkey = get_public_key_hex(self.identity)
 
-        # runtime state
         self.listener = None
         self.peers = {}
-
-        # 🔐 TRUSTED PEERS (NEW)
         self.trusted_peers = set()
 
         self.log.info(
@@ -61,11 +57,18 @@ class BotNet(callbacks.Plugin):
         )
 
     def die(self):
-        """Called automatically when plugin unloads/reloads."""
+        """Plugin shutdown cleanup."""
+
+        self.log.info("BotNet shutting down")
 
         if self.listener:
-            self.listener.stop()
-            self.listener = None
+            try:
+                self.listener.stop()
+            except Exception:
+                pass
+
+        for pubkey in list(self.peers.keys()):
+            self.remove_peer(pubkey)
 
         super().die()
 
@@ -82,29 +85,62 @@ class BotNet(callbacks.Plugin):
         if not ircdb.checkCapability(msg.prefix, 'owner'):
             self._notice(irc, msg, "Permission denied.")
             return False
+
         return True
 
     # -------------------------
-    # 🔐 NEW: TRUST SYSTEM
+    # TRUST
     # -------------------------
 
     def is_trusted(self, pubkey):
-        """Called by transport layer."""
         return pubkey in self.trusted_peers
 
     @wrap(['text'])
     def trust(self, irc, msg, args, pubkey):
-        """Trust a remote bot public key."""
+        """Trust a remote peer public key."""
 
         if not self._check_owner(irc, msg):
             return
 
         self.trusted_peers.add(pubkey)
 
+        self.log.info(
+            f"Trusted peer added: {pubkey}"
+        )
+
         self._notice(
             irc,
             msg,
-            f"Trusted peer added: {pubkey}"
+            f"Trusted peers: {len(self.trusted_peers)}"
+        )
+
+    # -------------------------
+    # PEERS
+    # -------------------------
+
+    def add_peer(self, pubkey, sock, addr):
+        self.peers[pubkey] = {
+            "socket": sock,
+            "addr": addr
+        }
+
+        self.log.info(
+            f"Peer added: {pubkey} from {addr}"
+        )
+
+    def remove_peer(self, pubkey):
+        if pubkey not in self.peers:
+            return
+
+        try:
+            self.peers[pubkey]["socket"].close()
+        except Exception:
+            pass
+
+        del self.peers[pubkey]
+
+        self.log.info(
+            f"Peer removed: {pubkey}"
         )
 
     # -------------------------
@@ -113,7 +149,7 @@ class BotNet(callbacks.Plugin):
 
     @wrap(['int'])
     def listen(self, irc, msg, args, port):
-        """Start BotNet listener."""
+        """Start listener on a TCP port."""
 
         if not self._check_owner(irc, msg):
             return
@@ -136,14 +172,15 @@ class BotNet(callbacks.Plugin):
             f"Listening on port {port}"
         )
 
+    @wrap([])
     def stop(self, irc, msg, args):
-        """Stop BotNet listener."""
+        """Stop listener."""
 
         if not self._check_owner(irc, msg):
             return
 
         if not self.listener:
-            self._notice(irc, msg, "Listener is not running.")
+            self._notice(irc, msg, "Listener not running.")
             return
 
         self.listener.stop()
@@ -151,14 +188,16 @@ class BotNet(callbacks.Plugin):
 
         self._notice(irc, msg, "Listener stopped.")
 
-    stop = wrap(stop)
-
     @wrap(['text', 'int'])
     def connect(self, irc, msg, args, host, port):
-        """Connect to peer."""
+        """Connect to remote BotNet peer."""
 
         if not self._check_owner(irc, msg):
             return
+
+        self.log.info(
+            f"Attempting BotNet connect to {host}:{port}"
+        )
 
         try:
             client = BotNetClient(self)
@@ -171,9 +210,10 @@ class BotNet(callbacks.Plugin):
                 "pubkey": self.pubkey,
             }
 
-            # ✔ FIXED: only send once
-            sock.sendall(
-                pack_message(hello)
+            sock.sendall(pack_message(hello))
+
+            self.log.info(
+                f"HELLO sent to {host}:{port}"
             )
 
             self._notice(

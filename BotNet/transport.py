@@ -1,7 +1,7 @@
 import socket
 import threading
 
-from .protocol import pack_message, unpack_message
+from .protocol import unpack_message
 from .messages import HELLO
 
 
@@ -31,8 +31,6 @@ class BotNetListener(threading.Thread):
 
             self.sock.bind((self.host, self.port))
             self.sock.listen(5)
-
-            # prevents accept() blocking forever
             self.sock.settimeout(1)
 
             self.plugin.log.info(
@@ -61,48 +59,69 @@ class BotNetListener(threading.Thread):
 
                 except Exception as e:
                     self.plugin.log.error(
-                        f"BotNet listener crashed: {e}"
+                        f"Listener error: {e}"
                     )
 
         finally:
-            self.stop()
+            try:
+                if self.sock:
+                    self.sock.close()
+            except Exception:
+                pass
 
     def handle_client(self, client, addr):
         peer_key = None
 
         try:
-            # -----------------------------
-            # STEP 1: read HELLO packet
-            # -----------------------------
+            client.settimeout(10)
+
             message = unpack_message(client)
 
             if not message:
+                self.plugin.log.info(
+                    f"Empty handshake from {addr}"
+                )
                 return
 
             self.plugin.log.info(
-                f"Received handshake from {addr}: {message}"
+                f"Handshake from {addr}: {message}"
             )
 
-            if message.get("type") == HELLO:
-                peer_key = message.get("pubkey")
-
-                # -----------------------------
-                # STEP 2: AUTH CHECK
-                # -----------------------------
-                if not self.plugin.is_trusted(peer_key):
-                    self.plugin.log.info(
-                        f"Rejected untrusted peer {peer_key} from {addr}"
-                    )
-                    client.close()
-                    return
-
+            if message.get("type") != HELLO:
                 self.plugin.log.info(
-                    f"Accepted trusted peer {peer_key} from {addr}"
+                    f"Invalid handshake from {addr}"
                 )
+                return
 
-            # -----------------------------
-            # STEP 3: normal message loop
-            # -----------------------------
+            peer_key = message.get("pubkey")
+
+            if not peer_key:
+                self.plugin.log.info(
+                    f"Missing pubkey from {addr}"
+                )
+                return
+
+            # reject self
+            if peer_key == self.plugin.pubkey:
+                self.plugin.log.warning(
+                    f"Rejected self-connection from {addr}"
+                )
+                return
+
+            if not self.plugin.is_trusted(peer_key):
+                self.plugin.log.info(
+                    f"Rejected untrusted peer {peer_key}"
+                )
+                return
+
+            self.plugin.log.info(
+                f"Accepted trusted peer {peer_key}"
+            )
+
+            self.plugin.add_peer(peer_key, client, addr)
+
+            client.settimeout(None)
+
             while self.running:
                 message = unpack_message(client)
 
@@ -110,16 +129,22 @@ class BotNetListener(threading.Thread):
                     break
 
                 self.plugin.log.info(
-                    f"Message from {peer_key or addr}: {message}"
+                    f"Message from {peer_key}: {message}"
                 )
 
         except Exception as e:
             self.plugin.log.error(
-                f"Client handler error from {addr}: {e}"
+                f"Client error from {addr}: {e}"
             )
 
         finally:
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                pass
+
+            if peer_key:
+                self.plugin.remove_peer(peer_key)
 
             self.plugin.log.info(
                 f"Connection closed from {addr}"
@@ -148,6 +173,8 @@ class BotNetClient:
             socket.AF_INET,
             socket.SOCK_STREAM
         )
+
+        sock.settimeout(10)
 
         sock.connect((host, port))
 

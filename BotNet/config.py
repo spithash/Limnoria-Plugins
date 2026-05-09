@@ -48,9 +48,34 @@ def configure(advanced):
 
 
 BotNet = conf.registerPlugin('BotNet')
-# This is where your configuration variables (if any) should go.  For example:
-# conf.registerGlobalValue(BotNet, 'someConfigVariableName',
-#     registry.Boolean(False, _("""Help for someConfigVariableName.""")))
+
+# Configuration variables
+conf.registerGlobalValue(BotNet, 'defaultPort',
+    registry.PositiveInteger(4557, _("""Default port for BotNet listener.""")))
+
+conf.registerGlobalValue(BotNet, 'heartbeatInterval',
+    registry.PositiveInteger(60, _("""Interval in seconds between PING messages.""")))
+
+conf.registerGlobalValue(BotNet, 'heartbeatTimeout',
+    registry.PositiveInteger(90, _("""Seconds without PONG before considering peer disconnected.""")))
+
+conf.registerGlobalValue(BotNet, 'messageCacheSize',
+    registry.PositiveInteger(1000, _("""Maximum number of message IDs to cache for flood prevention.""")))
+
+conf.registerGlobalValue(BotNet, 'maxTTL',
+    registry.PositiveInteger(10, _("""Maximum Time-To-Live for broadcast messages.""")))
+
+conf.registerGlobalValue(BotNet, 'partylineBufferSize',
+    registry.PositiveInteger(100, _("""Number of recent messages to keep in partyline buffer.""")))
+
+conf.registerGlobalValue(BotNet, 'autoReconnect',
+    registry.Boolean(True, _("""Automatically reconnect to trusted peers on plugin load.""")))
+
+conf.registerGlobalValue(BotNet, 'maxReconnectAttempts',
+    registry.PositiveInteger(10, _("""Maximum number of reconnection attempts before giving up.""")))
+
+conf.registerGlobalValue(BotNet, 'reconnectDelay',
+    registry.PositiveInteger(60, _("""Seconds to wait between reconnection attempts.""")))
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

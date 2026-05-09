@@ -124,8 +124,8 @@ class BotNetListener(threading.Thread):
             # Store by signing pubkey
             self.plugin.peers[peer_signing_pubkey] = peer
             
-            # Notify partyline about new peer
-            self.plugin._notify_partyline_peer_joined(peer_bot_name, peer_signing_pubkey)
+            # Notify partyline about new peer - ONLY ONE ARGUMENT
+            self.plugin._notify_partyline_peer_joined(peer_bot_name)
             
             # Step 6: Start encrypted receive loop
             self._receive_loop(client, peer, encryption_manager)
@@ -145,7 +145,7 @@ class BotNetListener(threading.Thread):
 
     def _receive_loop(self, sock, peer, encryption_manager):
         """Receive encrypted messages from connected peer"""
-        heartbeat_timeout = self.plugin.registryValue('heartbeatTimeout', self.plugin.irc.network)
+        heartbeat_timeout = 90
         
         while self.running and peer.pubkey_signing in self.plugin.peers:
             try:
@@ -170,14 +170,6 @@ class BotNetListener(threading.Thread):
                     
                 elif msg_type == BROADCAST:
                     self.plugin.handle_broadcast(message, from_peer=peer.pubkey_signing)
-                    
-                elif msg_type == PARTYLINE_CMD:
-                    # Handle partyline command from peer
-                    self.plugin.handle_partyline_command(message, peer)
-                    
-                elif msg_type == PARTYLINE_MSG:
-                    # Handle partyline message from peer (for wholine)
-                    self.plugin.handle_partyline_message(message, peer)
                     
                 elif msg_type == STATUS_QUERY:
                     # Respond with status
@@ -241,7 +233,7 @@ class BotNetClient:
                 peer_encryption = response.get("pubkey_encryption")
                 peer_bot_name = response.get("bot_name")
                 
-                # Check if trusted (if pubkey provided, verify it matches)
+                # Check if trusted
                 if not self.plugin.is_trusted(peer_signing):
                     self.plugin.log.info(f"Peer {peer_signing[:16]}... not trusted, disconnecting")
                     sock.close()
@@ -271,8 +263,8 @@ class BotNetClient:
                 # Store by signing pubkey
                 self.plugin.peers[peer_signing] = peer
                 
-                # Notify partyline
-                self.plugin._notify_partyline_peer_joined(peer_bot_name, peer_signing)
+                # Notify partyline about new peer - ONLY ONE ARGUMENT
+                self.plugin._notify_partyline_peer_joined(peer_bot_name)
                 
                 # Start encrypted receive thread
                 receive_thread = threading.Thread(
@@ -296,7 +288,7 @@ class BotNetClient:
 
     def _receive_loop(self, sock, peer, encryption_manager):
         """Receive encrypted messages"""
-        heartbeat_timeout = self.plugin.registryValue('heartbeatTimeout', self.plugin.irc.network)
+        heartbeat_timeout = 90
         
         while peer.pubkey_signing in self.plugin.peers:
             try:
@@ -316,10 +308,6 @@ class BotNetClient:
                     peer.last_pong = time.time()
                 elif msg_type == BROADCAST:
                     self.plugin.handle_broadcast(message, from_peer=peer.pubkey_signing)
-                elif msg_type == PARTYLINE_CMD:
-                    self.plugin.handle_partyline_command(message, peer)
-                elif msg_type == PARTYLINE_MSG:
-                    self.plugin.handle_partyline_message(message, peer)
                     
             except socket.timeout:
                 if time.time() - peer.last_pong > heartbeat_timeout:

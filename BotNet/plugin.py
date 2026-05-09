@@ -699,12 +699,12 @@ class BotNet(callbacks.Plugin):
     stop = wrap(stop)
 
     def connect(self, irc, msg, args, hostport):
-        """<host:port> -- Connect to a BotNet peer (example: 100.113.68.117:4557)."""
+        """<host:port> -- Connect to a BotNet peer (example: 192.168.1.100:4557)."""
         
         # Parse host:port format
         try:
             if ':' not in hostport:
-                self._notice(irc, msg, "❌ Usage: host:port (example: 100.113.68.117:4557)")
+                self._notice(irc, msg, "❌ Usage: host:port (example: 192.168.1.100:4557)")
                 return
             
             parts = hostport.rsplit(':', 1)

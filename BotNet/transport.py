@@ -3,7 +3,7 @@ import threading
 import time
 
 from .protocol import pack_message, unpack_message, create_handshake_message, create_handshake_ack
-from .messages import HELLO, PING, PONG, BROADCAST, STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION
+from .messages import HELLO, PING, PONG, BROADCAST, STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION, ReplayProtectionManager
 from .crypto import EncryptionManager
 
 
@@ -169,6 +169,9 @@ class BotNetListener(threading.Thread):
                 if peer_bot_name:
                     self.plugin._notify_partyline_peer_left(peer_bot_name)
                 del self.plugin.peers[peer_signing_pubkey]
+                # Clean up replay cache for this peer
+                if hasattr(self.plugin, 'replay_manager'):
+                    self.plugin.replay_manager.cleanup_sender(peer_signing_pubkey)
             self.plugin.log.info(f"Connection closed from {addr}")
 
     def _receive_loop(self, sock, peer, encryption_manager):
@@ -346,3 +349,6 @@ class BotNetClient:
         if peer.pubkey_signing in self.plugin.peers:
             self.plugin._notify_partyline_peer_left(peer.bot_name)
             del self.plugin.peers[peer.pubkey_signing]
+            # Clean up replay cache for this peer
+            if hasattr(self.plugin, 'replay_manager'):
+                self.plugin.replay_manager.cleanup_sender(peer.pubkey_signing)

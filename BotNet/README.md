@@ -1,41 +1,47 @@
 # BotNet Plugin for Limnoria
 
-**Decentralized Encrypted Peer-to-Peer Botnet Framework for Limnoria IRC Bots**
-
-BotNet transforms your Limnoria bot into a node in a secure, decentralized mesh network. Create private party lines, broadcast messages across botnets, and build trusted peer-to-peer communication channels between bots - all with end-to-end encryption.
-
-> **⚠️ SECURITY NOTICE: This plugin is vibecoded and has not been formally reviewed for security vulnerabilities. Use at your own risk in production environments.**
+Decentralized encrypted peer-to-peer mesh network for Limnoria IRC bots.
 
 ## Features
 
-- **🔐 End-to-End Encryption** - All peer communications encrypted using NaCl (X25519)
-- **✍️ Message Signing** - Every broadcast is signed with Ed25519 to prevent forgery
-- **🌐 Decentralized Mesh** - No central servers, pure peer-to-peer architecture
-- **📡 Botnet Party Line** - Real-time messaging with `bcast`, `bwho`, `bmap`, `bquit`, `bhelp`
-- **🔄 Flooding with Deduplication** - Messages propagate with TTL and duplicate prevention
-- **💾 Persistent State** - Keys and trusted peers survive plugin reloads
-- **❤️ Heartbeat System** - Automatic PING/PONG keeps connections alive
-- **🔄 Auto-Reconnection** - Reconnects to trusted peers on startup with retry logic
-- **🏷️ Botnet Groups** - Organize peers into custom botnet names (Nest is mandatory)
-- **🛡️ DoS Protection** - Rate limiting, message size caps, and read deadlines
+- X25519 encryption for all peer-to-peer communication
+- Ed25519 signing keys for peer authentication and message signing
+- Decentralized mesh network with flood routing and TTL-based propagation
+- Message deduplication to prevent broadcast storms
+- Replay attack protection with timestamp validation and per-sender message caching
+- Partyline interface with simple commands: bwho, bmap, bcast, bquit, bhelp
+- Automatic reconnection with exponential backoff
+- PING/PONG heartbeat system
+- Persistent storage in BotNet/ subfolder
 
-## Security Model
+## Commands
 
-- Each bot generates Ed25519 signing keys + X25519 encryption keys
-- **No central authority** - Trust established via manual public key exchange
-- All messages are encrypted AND signed to prevent eavesdropping, forgery, and tampering
-- Peers must be explicitly trusted before any communication is allowed
-- Rate limiting prevents connection flood attacks
+### Partyline Commands (requires `partyline` mode)
+- `bwho` - Show online users in the mesh
+- `bmap` - Show mesh topology tree
+- `bcast <botnet> <message>` - Send signed broadcast to a botnet
+- `bquit` - Exit partyline mode
+- `bhelp` - Show help
 
-## Installation
+### Core Commands
+- `mykey` - Display full public signing key for sharing
+- `status` - Show connection status and peer information
+- `listen <port>` - Start encrypted listener
+- `connect <host:port>` - Connect to a peer
+- `partyline` - Enter partyline mode
 
-### Prerequisites
+### Botnet Management
+- `trust <pubkey> [botnets]` - Trust a remote bot (always adds to Nest)
+- `untrust <pubkey>` - Remove trust and disconnect
+- `list_trusted` - List all trusted peers
+- `joinnest` - Join Nest botnet
+- `leavenest` - Leave Nest botnet
 
-- Limnoria (Supybot) IRC bot framework
-- Python 3.7+
-- PyNaCl (libsodium)
+## Security
 
-### Install Dependencies
-
-```bash
-pip install pynacl msgpack
+- All mesh traffic encrypted with NaCl Box (X25519)
+- All broadcast messages signed with Ed25519 (prevents forgery)
+- Replay attack protection with 5-minute timestamp window
+- Rate limiting to prevent DoS (max 3 connections/IP/60s)
+- Maximum message size limit (10MB)
+- Nonce-based handshake to prevent replay attacks

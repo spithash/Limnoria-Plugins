@@ -112,7 +112,8 @@ def create_handshake_message(bot_name, pubkey_signing, pubkey_encryption, protoc
         "bot_name": bot_name,
         "pubkey_signing": pubkey_signing,
         "pubkey_encryption": pubkey_encryption,
-        "nonce": nonce
+        "nonce": nonce,
+        "timestamp": time.time()
     }
 
 
@@ -124,7 +125,8 @@ def create_handshake_ack(status, bot_name, pubkey_signing, pubkey_encryption, no
         "bot_name": bot_name,
         "pubkey_signing": pubkey_signing,
         "pubkey_encryption": pubkey_encryption,
-        "nonce": nonce
+        "nonce": nonce,
+        "timestamp": time.time()
     }
 
 
@@ -135,7 +137,6 @@ def sign_message(message, signing_key):
     """
     import msgpack
     from nacl.signing import SigningKey
-    from nacl.encoding import HexEncoder
     
     # Remove signature field if exists (for re-signing)
     msg_copy = message.copy()

@@ -52,7 +52,8 @@ from .transport import BotNetListener, BotNetClient
 from .protocol import pack_message, unpack_message, sign_message, verify_message
 from .messages import (
     HELLO, PING, PONG, BROADCAST,
-    STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION, MessageIDGenerator
+    STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION, 
+    MessageIDGenerator, ReplayProtectionManager
 )
 from .peer import Peer
 
@@ -84,10 +85,13 @@ class BotNet(callbacks.Plugin):
         # Botnet membership (which botnets this bot belongs to)
         self.my_botnets = {"Nest"}  # Default botnet is always Nest
         
-        # Message flooding state
+        # Message flooding state (for deduplication)
         self.seen_messages = set()  # For flood deduplication
         self.message_cache_max = self.registryValue('messageCacheSize')
         self.msg_id_gen = MessageIDGenerator(self.pubkey_signing)
+        
+        # Replay protection
+        self.replay_manager = ReplayProtectionManager()
         
         # Message buffer for partyline
         self.message_buffer = deque(maxlen=self.registryValue('partylineBufferSize'))
@@ -292,26 +296,33 @@ class BotNet(callbacks.Plugin):
                     self.log.error(f"Failed to notify {identifier}: {e}")
 
     def handle_broadcast(self, message, from_peer):
-        """Handle incoming signed broadcast with flood prevention and signature verification."""
+        """Handle incoming signed broadcast with flood prevention, signature verification, and replay protection."""
         msg_id = message.get("msg_id")
+        msg_timestamp = message.get("timestamp", 0)
+        sender_pubkey = message.get("sender_pubkey")
         
-        # Check if we've seen this message
+        # Check if we've seen this message (flood deduplication)
         if msg_id in self.seen_messages:
             return
         
-        # Verify the signature before processing
-        sender_pubkey = message.get("sender_pubkey")
+        # Verify sender pubkey exists
         if not sender_pubkey:
             self.log.warning("Received broadcast without sender pubkey, ignoring")
             return
         
-        # Make a copy for verification (verify_message modifies the dict)
+        # REPLAY PROTECTION: Check timestamp and replay cache
+        if self.replay_manager.is_replay(sender_pubkey, msg_id, msg_timestamp):
+            self.log.warning(f"Replay attack detected: msg_id={msg_id} from {sender_pubkey[:16]}...")
+            return
+        
+        # SIGNATURE VERIFICATION: Verify the message signature
         msg_copy = copy.deepcopy(message)
         
         if not verify_message(msg_copy, sender_pubkey):
             self.log.warning(f"Invalid signature on broadcast from {sender_pubkey[:16]}..., ignoring")
             return
         
+        # Add to seen messages (flood deduplication)
         self.seen_messages.add(msg_id)
         if len(self.seen_messages) > self.message_cache_max:
             self.seen_messages = set(list(self.seen_messages)[-800:])
@@ -339,7 +350,7 @@ class BotNet(callbacks.Plugin):
                         self.log.error(f"Failed to forward to {peer.bot_name}: {e}")
 
     def broadcast(self, botnet_name, message_text):
-        """Send a signed broadcast message to a botnet."""
+        """Send a signed broadcast message to a botnet with timestamp."""
         if botnet_name not in self.my_botnets:
             return False
         
@@ -352,15 +363,22 @@ class BotNet(callbacks.Plugin):
             "botnet": botnet_name,
             "content": message_text,
             "ttl": self.registryValue('maxTTL'),
-            "timestamp": time.time()
+            "timestamp": time.time()  # Add timestamp for replay protection
         }
         
         # Sign the message with our signing key
         broadcast_msg = sign_message(broadcast_msg, self.identity)
         
+        # Add to seen messages (so we don't process our own broadcast)
         self.seen_messages.add(msg_id)
+        
+        # Add to replay cache to prevent self-replay
+        self.replay_manager.is_replay(self.pubkey_signing, msg_id, broadcast_msg["timestamp"])
+        
+        # Add to local buffer
         self._add_to_message_buffer(botnet_name, self.irc.nick, message_text)
         
+        # Send to all connected peers in this botnet
         count = 0
         for pubkey, peer in self.peers.items():
             if peer.connected and self._peer_in_botnet(pubkey, botnet_name):

@@ -2,6 +2,8 @@
 
 Decentralized encrypted peer-to-peer mesh network for Limnoria IRC bots.
 
+> **⚠️ DISCLAIMER**: This plugin was developed with vibecoding and has not been formally security-audited. Use at your own risk. While it implements strong cryptography, the implementation may contain bugs or oversights. Review the code before deploying in sensitive environments.
+
 ## Features
 
 - X25519 encryption for all peer-to-peer communication

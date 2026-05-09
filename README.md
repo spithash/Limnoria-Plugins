@@ -7,4 +7,4 @@
 7. Displays channel statistics as text-based graphs using ChannelLogger logs --> [GraphStats](https://github.com/spithash/Limnoria-Plugins/tree/main/GraphStats)
 8. Create reminders for users --> [RemindMe](https://github.com/spithash/Limnoria-Plugins/tree/main/RemindMe)
 9. Fetches recipes from TheMealDB API --> [TheMealDB](https://github.com/spithash/Limnoria-Plugins/tree/main/TheMealDB)
-
+10. Decentralized Encrypted Peer-to-Peer Botnet Framework for Limnoria IRC Bots --> [BotNet](https://github.com/spithash/Limnoria-Plugins/tree/main/BotNet)

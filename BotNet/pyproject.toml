@@ -3,7 +3,7 @@ requires = ["setuptools"]
 
 [project]
 name = "limnoria-botnet"
-version = "1.3.0"
+version = "1.3.5"
 authors = [
     { name = "Stathis Xantinidis spithash@Libera" }
 ]

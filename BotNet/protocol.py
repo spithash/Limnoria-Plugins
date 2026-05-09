@@ -56,7 +56,7 @@ def unpack_message(sock, decryption_box=None, timeout=30, max_size=10*1024*1024)
         if time.time() > deadline:
             raise socket.timeout("Message read deadline exceeded")
         
-        # Read length with per-chunk timeout
+        # Read length
         header = sock.recv(4)
         if not header:
             return None
@@ -67,13 +67,13 @@ def unpack_message(sock, decryption_box=None, timeout=30, max_size=10*1024*1024)
         if length > max_size:
             raise ValueError(f"Message too large: {length} bytes (max: {max_size})")
         
-        # Read payload with incremental timeout
+        # Read payload in chunks
         payload = b""
         remaining = length
         chunk_size = 8192  # Read in 8KB chunks
         
         while remaining > 0:
-            # Reset timeout for each chunk (keep connection alive)
+            # Reset timeout for each chunk
             sock.settimeout(timeout)
             to_read = min(chunk_size, remaining)
             chunk = sock.recv(to_read)
@@ -129,12 +129,15 @@ def create_handshake_ack(status, bot_name, pubkey_signing, pubkey_encryption, no
 
 
 def sign_message(message, signing_key):
-    """Sign a message with Ed25519 signing key for authentication"""
+    """
+    Sign a message with Ed25519 signing key for authentication.
+    Adds a 'signature' field to the message.
+    """
     import msgpack
     from nacl.signing import SigningKey
     from nacl.encoding import HexEncoder
     
-    # Remove signature field if exists
+    # Remove signature field if exists (for re-signing)
     msg_copy = message.copy()
     msg_copy.pop('signature', None)
     
@@ -147,20 +150,29 @@ def sign_message(message, signing_key):
 
 
 def verify_message(message, verify_key_hex):
-    """Verify message signature"""
+    """
+    Verify a message's signature.
+    Returns True if signature is valid, False otherwise.
+    """
     import msgpack
     from nacl.signing import VerifyKey
     from nacl.encoding import HexEncoder
     
-    signature = bytes.fromhex(message.pop('signature', ''))
+    signature = message.pop('signature', None)
     if not signature:
         return False
     
+    try:
+        signature_bytes = bytes.fromhex(signature)
+    except (ValueError, TypeError):
+        return False
+    
+    # Serialize the message without signature
     serialized = msgpack.packb(message, use_bin_type=True)
     
     try:
         verify_key = VerifyKey(verify_key_hex, encoder=HexEncoder)
-        verify_key.verify(serialized, signature)
+        verify_key.verify(serialized, signature_bytes)
         return True
     except Exception:
         return False

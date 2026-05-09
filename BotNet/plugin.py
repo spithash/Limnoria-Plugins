@@ -34,6 +34,7 @@ import traceback
 import json
 import os
 import time
+import copy
 from collections import deque
 from supybot import ircdb, conf, ircmsgs, ircutils, world
 from supybot import callbacks
@@ -48,7 +49,7 @@ from .crypto import (
     get_botnet_dir
 )
 from .transport import BotNetListener, BotNetClient
-from .protocol import pack_message, unpack_message
+from .protocol import pack_message, unpack_message, sign_message, verify_message
 from .messages import (
     HELLO, PING, PONG, BROADCAST,
     STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION, MessageIDGenerator
@@ -291,10 +292,24 @@ class BotNet(callbacks.Plugin):
                     self.log.error(f"Failed to notify {identifier}: {e}")
 
     def handle_broadcast(self, message, from_peer):
-        """Handle incoming broadcast with flood prevention."""
+        """Handle incoming signed broadcast with flood prevention and signature verification."""
         msg_id = message.get("msg_id")
         
+        # Check if we've seen this message
         if msg_id in self.seen_messages:
+            return
+        
+        # Verify the signature before processing
+        sender_pubkey = message.get("sender_pubkey")
+        if not sender_pubkey:
+            self.log.warning("Received broadcast without sender pubkey, ignoring")
+            return
+        
+        # Make a copy for verification (verify_message modifies the dict)
+        msg_copy = copy.deepcopy(message)
+        
+        if not verify_message(msg_copy, sender_pubkey):
+            self.log.warning(f"Invalid signature on broadcast from {sender_pubkey[:16]}..., ignoring")
             return
         
         self.seen_messages.add(msg_id)
@@ -306,10 +321,12 @@ class BotNet(callbacks.Plugin):
         sender_botname = message.get("sender_botname")
         ttl = message.get("ttl", 10)
         
+        # Check if we should display this message (if we're in this botnet)
         if target_botnet in self.my_botnets:
             self.log.info(f"[{target_botnet}] {sender_botname}: {content}")
             self._add_to_message_buffer(target_botnet, sender_botname, content)
         
+        # Forward to other peers if TTL > 0
         if ttl > 0 and target_botnet in self.my_botnets:
             message["ttl"] = ttl - 1
             for pubkey, peer in self.peers.items():
@@ -322,7 +339,7 @@ class BotNet(callbacks.Plugin):
                         self.log.error(f"Failed to forward to {peer.bot_name}: {e}")
 
     def broadcast(self, botnet_name, message_text):
-        """Send a broadcast message to a botnet."""
+        """Send a signed broadcast message to a botnet."""
         if botnet_name not in self.my_botnets:
             return False
         
@@ -338,6 +355,9 @@ class BotNet(callbacks.Plugin):
             "timestamp": time.time()
         }
         
+        # Sign the message with our signing key
+        broadcast_msg = sign_message(broadcast_msg, self.identity)
+        
         self.seen_messages.add(msg_id)
         self._add_to_message_buffer(botnet_name, self.irc.nick, message_text)
         
@@ -352,7 +372,7 @@ class BotNet(callbacks.Plugin):
                 except Exception as e:
                     self.log.error(f"Failed to send to {peer.bot_name}: {e}")
         
-        self.log.info(f"Broadcast to '{botnet_name}' sent to {count} peers")
+        self.log.info(f"Signed broadcast to '{botnet_name}' sent to {count} peers")
         return True
 
     def get_status_response(self):
@@ -409,7 +429,7 @@ class BotNet(callbacks.Plugin):
             irc.reply("     └─ (no connected peers)", private=True)
 
     def bcast(self, irc, msg, args):
-        """<botnet> <message> -- Broadcast a message to a botnet."""
+        """<botnet> <message> -- Broadcast a signed message to a botnet."""
         if not self._check_owner(irc, msg):
             return
         
@@ -457,7 +477,7 @@ class BotNet(callbacks.Plugin):
             return
         
         irc.reply("BotNet Partyline Commands:", private=True)
-        irc.reply("  bcast <botnet> <msg>  - Send message to a botnet", private=True)
+        irc.reply("  bcast <botnet> <msg>  - Send signed message to a botnet", private=True)
         irc.reply("  bwho                   - Show online users", private=True)
         irc.reply("  bmap                   - Show mesh topology", private=True)
         irc.reply("  bquit                  - Exit partyline", private=True)
@@ -676,7 +696,7 @@ class BotNet(callbacks.Plugin):
         irc.reply(f"Peers online: {len(self.peers)}", private=True)
         irc.reply("", private=True)
         irc.reply("Available commands:", private=True)
-        irc.reply("  bcast <botnet> <msg>  - Send message to a botnet", private=True)
+        irc.reply("  bcast <botnet> <msg>  - Send signed message to a botnet", private=True)
         irc.reply("  bwho                   - Show online users", private=True)
         irc.reply("  bmap                   - Show mesh topology", private=True)
         irc.reply("  bquit                  - Exit partyline", private=True)

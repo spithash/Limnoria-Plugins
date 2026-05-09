@@ -3,7 +3,7 @@ import threading
 import time
 
 from .protocol import pack_message, unpack_message, create_handshake_message, create_handshake_ack
-from .messages import HELLO, PING, PONG, BROADCAST, PARTYLINE_CMD, PARTYLINE_MSG, STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION
+from .messages import HELLO, PING, PONG, BROADCAST, STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION
 from .crypto import EncryptionManager
 
 
@@ -17,6 +17,26 @@ class BotNetListener(threading.Thread):
         self.sock = None
         self.running = True
         self.active_handlers = []
+        
+        # Rate limiting
+        self.connection_history = {}  # IP -> list of timestamps
+        self.max_connections_per_ip = 3
+        self.connection_window = 60  # seconds
+
+    def _check_rate_limit(self, ip):
+        """Rate limit connections per IP to prevent DoS"""
+        now = time.time()
+        if ip not in self.connection_history:
+            self.connection_history[ip] = []
+        
+        # Clean old entries
+        self.connection_history[ip] = [t for t in self.connection_history[ip] if now - t < self.connection_window]
+        
+        if len(self.connection_history[ip]) >= self.max_connections_per_ip:
+            return False
+        
+        self.connection_history[ip].append(now)
+        return True
 
     def run(self):
         try:
@@ -31,6 +51,13 @@ class BotNetListener(threading.Thread):
             while self.running:
                 try:
                     client, addr = self.sock.accept()
+                    
+                    # Rate limit check
+                    if not self._check_rate_limit(addr[0]):
+                        self.plugin.log.warning(f"Rate limit exceeded for {addr[0]}, rejecting connection")
+                        client.close()
+                        continue
+                    
                     self.plugin.log.info(f"Incoming connection from {addr[0]}:{addr[1]}")
                     
                     handler = threading.Thread(
@@ -41,8 +68,8 @@ class BotNetListener(threading.Thread):
                     handler.start()
                     self.active_handlers.append(handler)
                     
-                    # Cleanup finished handlers
-                    self.active_handlers = [h for h in self.active_handlers if h.is_alive()]
+                    # Cleanup finished handlers (limit to 100 to prevent memory leak)
+                    self.active_handlers = [h for h in self.active_handlers if h.is_alive()][-100:]
 
                 except socket.timeout:
                     continue
@@ -68,9 +95,9 @@ class BotNetListener(threading.Thread):
         encryption_manager = None
         
         try:
-            # Step 1: Receive HELLO (plaintext)
+            # Step 1: Receive HELLO (plaintext) with short timeout
             client.settimeout(30)
-            message = unpack_message(client, timeout=30)
+            message = unpack_message(client, timeout=30, max_size=4096)  # Small max for handshake
             
             if not message or message.get("type") != HELLO:
                 self.plugin.log.info(f"Invalid handshake from {addr}")
@@ -79,6 +106,7 @@ class BotNetListener(threading.Thread):
             peer_signing_pubkey = message.get("pubkey_signing")
             peer_encryption_pubkey = message.get("pubkey_encryption")
             peer_bot_name = message.get("bot_name")
+            handshake_nonce = message.get("nonce")
             
             # Step 2: Check if trusted
             if not self.plugin.is_trusted(peer_signing_pubkey):
@@ -100,16 +128,17 @@ class BotNetListener(threading.Thread):
             encryption_manager = EncryptionManager(self.plugin.encryption_private_key)
             encryption_manager.add_peer(peer_signing_pubkey, peer_encryption_pubkey)
             
-            # Step 4: Send ACK (plaintext for handshake completion)
+            # Step 4: Send ACK
             ack = create_handshake_ack(
                 status="accepted",
                 bot_name=self.plugin.irc.nick,
                 pubkey_signing=self.plugin.pubkey_signing,
-                pubkey_encryption=self.plugin.encryption_public_key_hex
+                pubkey_encryption=self.plugin.encryption_public_key_hex,
+                nonce=handshake_nonce
             )
             client.sendall(pack_message(ack))
             
-            self.plugin.log.info(f"Sent encrypted handshake ACK to {peer_bot_name}")
+            self.plugin.log.info(f"Sent handshake ACK to {peer_bot_name}")
             
             # Step 5: Create peer object
             from .peer import Peer
@@ -124,7 +153,7 @@ class BotNetListener(threading.Thread):
             # Store by signing pubkey
             self.plugin.peers[peer_signing_pubkey] = peer
             
-            # Notify partyline about new peer - ONLY ONE ARGUMENT
+            # Notify partyline about new peer
             self.plugin._notify_partyline_peer_joined(peer_bot_name)
             
             # Step 6: Start encrypted receive loop
@@ -137,7 +166,6 @@ class BotNetListener(threading.Thread):
         finally:
             client.close()
             if peer_signing_pubkey and peer_signing_pubkey in self.plugin.peers:
-                # Notify partyline about peer leaving
                 if peer_bot_name:
                     self.plugin._notify_partyline_peer_left(peer_bot_name)
                 del self.plugin.peers[peer_signing_pubkey]
@@ -149,8 +177,8 @@ class BotNetListener(threading.Thread):
         
         while self.running and peer.pubkey_signing in self.plugin.peers:
             try:
-                # Use peer's encryption box for decryption
-                message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50)
+                # Use peer's encryption box for decryption with reasonable timeout
+                message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50, max_size=10*1024*1024)
                 
                 if not message:
                     self.plugin.log.info(f"Peer {peer.bot_name} disconnected")
@@ -159,7 +187,6 @@ class BotNetListener(threading.Thread):
                 msg_type = message.get("type")
                 
                 if msg_type == PING:
-                    # Respond to ping with encrypted PONG
                     pong = {"type": PONG, "timestamp": message.get("timestamp", time.time())}
                     encrypted_pong = pack_message(pong, encryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing))
                     sock.sendall(encrypted_pong)
@@ -172,7 +199,6 @@ class BotNetListener(threading.Thread):
                     self.plugin.handle_broadcast(message, from_peer=peer.pubkey_signing)
                     
                 elif msg_type == STATUS_QUERY:
-                    # Respond with status
                     status_response = self.plugin.get_status_response()
                     encrypted_response = pack_message(status_response, encryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing))
                     sock.sendall(encrypted_response)
@@ -181,7 +207,6 @@ class BotNetListener(threading.Thread):
                     self.plugin.log.debug(f"Unknown message type {msg_type} from {peer.bot_name}")
                     
             except socket.timeout:
-                # Check if peer is still alive
                 if time.time() - peer.last_pong > heartbeat_timeout:
                     self.plugin.log.warning(f"Peer {peer.bot_name} timed out (no PONG for {heartbeat_timeout}s)")
                     break
@@ -192,7 +217,7 @@ class BotNetListener(threading.Thread):
 
     def stop(self):
         self.running = False
-        for handler in self.active_handlers:
+        for handler in self.active_handlers[:50]:  # Limit join time
             if handler.is_alive():
                 handler.join(timeout=1)
         if self.sock:
@@ -210,6 +235,7 @@ class BotNetClient:
     def connect(self, host, port, peer_signing_pubkey=None):
         """Connect to a peer with encrypted handshake"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(30)  # Overall connection timeout
         
         try:
             sock.connect((host, port))
@@ -225,8 +251,7 @@ class BotNetClient:
             sock.sendall(pack_message(hello))
             
             # Wait for ACK (plaintext)
-            sock.settimeout(30)
-            response = unpack_message(sock, timeout=30)
+            response = unpack_message(sock, timeout=30, max_size=4096)
             
             if response and response.get("type") == "hello_ack" and response.get("status") == "accepted":
                 peer_signing = response.get("pubkey_signing")
@@ -263,7 +288,7 @@ class BotNetClient:
                 # Store by signing pubkey
                 self.plugin.peers[peer_signing] = peer
                 
-                # Notify partyline about new peer - ONLY ONE ARGUMENT
+                # Notify partyline about new peer
                 self.plugin._notify_partyline_peer_joined(peer_bot_name)
                 
                 # Start encrypted receive thread
@@ -292,7 +317,7 @@ class BotNetClient:
         
         while peer.pubkey_signing in self.plugin.peers:
             try:
-                message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50)
+                message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50, max_size=10*1024*1024)
                 
                 if not message:
                     break

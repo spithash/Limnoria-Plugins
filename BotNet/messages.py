@@ -11,8 +11,6 @@ PARTYLINE_CMD = "partyline_cmd"
 PARTYLINE_MSG = "partyline_msg"
 STATUS_QUERY = "status_query"
 STATUS_RESPONSE = "status_response"
-WHOLINE = "wholine"
-MAP_UPDATE = "map_update"
 
 PROTOCOL_VERSION = 1
 SUPPORTED_VERSIONS = [1]
@@ -21,9 +19,8 @@ SUPPORTED_VERSIONS = [1]
 CMD_BROADCAST = "broadcast"
 CMD_WHO = "who"
 CMD_MAP = "map"
-CMD_WHOLINE = "wholine"
-CMD_HELP = "help"
 CMD_QUIT = "quit"
+CMD_HELP = "help"
 
 
 class MessageIDGenerator:

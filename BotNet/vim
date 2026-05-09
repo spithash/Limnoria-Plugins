@@ -91,8 +91,8 @@ class BotNet(callbacks.Plugin):
         # Message buffer for partyline
         self.message_buffer = deque(maxlen=self.registryValue('partylineBufferSize'))
         
-        # Track users in partyline mode (using hostmask as key)
-        self.partyline_users = {}  # hostmask -> {'nick': nick, 'last_activity': time}
+        # Track users in partyline mode (account -> session data)
+        self.partyline_users = {}  # account -> {'nick': nick, 'last_activity': time}
         
         # Heartbeat control
         self.heartbeat_running = True
@@ -174,17 +174,18 @@ class BotNet(callbacks.Plugin):
             return False
         return True
 
-    def _get_user_identifier(self, irc, msg):
-        """Get a unique identifier for the user (hostmask)"""
-        return msg.prefix
+    def _get_user_account(self, irc, msg):
+        """Get user's IRC account name (requires NickServ identification)"""
+        account = irc.getAccount(msg)
+        if not account or account == '*':
+            return None
+        return account
 
     def _listener_error(self, error):
-        """Handle listener startup error."""
         self.log.error(f"Listener failed to start: {error}")
         self.listener = None
 
     def _schedule_reconnect_all(self):
-        """Schedule reconnection to all trusted peers."""
         def reconnect_task():
             for pubkey, peer_info in self.trusted_peers.items():
                 if pubkey not in self.peers and peer_info.get('host') and peer_info.get('port'):
@@ -192,7 +193,6 @@ class BotNet(callbacks.Plugin):
         threading.Thread(target=reconnect_task, daemon=True).start()
 
     def _attempt_reconnect(self, pubkey, peer_info, retry_delay=None):
-        """Attempt to reconnect with retry logic."""
         if pubkey in self.peers:
             return
         
@@ -221,7 +221,6 @@ class BotNet(callbacks.Plugin):
             threading.Timer(retry_delay, self._attempt_reconnect, args=(pubkey, peer_info, retry_delay)).start()
 
     def _heartbeat_sender(self):
-        """Send PING to all connected peers periodically."""
         interval = self.registryValue('heartbeatInterval')
         while self.heartbeat_running:
             time.sleep(interval)
@@ -237,22 +236,18 @@ class BotNet(callbacks.Plugin):
                         peer.connected = False
 
     def _peer_in_botnet(self, pubkey, botnet_name):
-        """Check if a peer belongs to a botnet."""
         if pubkey in self.trusted_peers:
             botnets = self.trusted_peers[pubkey].get('botnets', ['Nest'])
             return botnet_name in botnets
         return False
 
     def is_trusted(self, pubkey):
-        """Check if a public key is trusted."""
         return pubkey in self.trusted_peers
 
     def get_recent_messages(self, limit=100):
-        """Get recent broadcast messages from buffer."""
         return list(self.message_buffer)[-limit:]
 
     def _add_to_message_buffer(self, botnet, sender, content):
-        """Add a message to the buffer and notify partyline users."""
         msg = {
             'timestamp': time.time(),
             'botnet': botnet,
@@ -261,37 +256,34 @@ class BotNet(callbacks.Plugin):
         }
         self.message_buffer.append(msg)
         
-        # Notify partyline users
-        for identifier, session in list(self.partyline_users.items()):
+        # Notify partyline users by account
+        for account, session in list(self.partyline_users.items()):
             try:
                 nick = session.get('nick')
                 if nick:
                     self.irc.sendMsg(ircmsgs.privmsg(nick, f"[{botnet}] {sender}: {content}"))
             except Exception as e:
-                self.log.error(f"Failed to send to {identifier}: {e}")
+                self.log.error(f"Failed to send to {account}: {e}")
 
     def _notify_partyline_peer_joined(self, bot_name):
-        """Notify partyline users about a new peer."""
-        for identifier, session in list(self.partyline_users.items()):
+        for account, session in list(self.partyline_users.items()):
             nick = session.get('nick')
             if nick:
                 try:
                     self.irc.sendMsg(ircmsgs.privmsg(nick, f"*** {bot_name} has joined the botnet"))
                 except Exception as e:
-                    self.log.error(f"Failed to notify {identifier}: {e}")
+                    self.log.error(f"Failed to notify {account}: {e}")
 
     def _notify_partyline_peer_left(self, bot_name):
-        """Notify partyline users about a peer leaving."""
-        for identifier, session in list(self.partyline_users.items()):
+        for account, session in list(self.partyline_users.items()):
             nick = session.get('nick')
             if nick:
                 try:
                     self.irc.sendMsg(ircmsgs.privmsg(nick, f"*** {bot_name} has left the botnet"))
                 except Exception as e:
-                    self.log.error(f"Failed to notify {identifier}: {e}")
+                    self.log.error(f"Failed to notify {account}: {e}")
 
     def handle_broadcast(self, message, from_peer):
-        """Handle incoming broadcast with flood prevention."""
         msg_id = message.get("msg_id")
         
         if msg_id in self.seen_messages:
@@ -322,7 +314,6 @@ class BotNet(callbacks.Plugin):
                         self.log.error(f"Failed to forward to {peer.bot_name}: {e}")
 
     def broadcast(self, botnet_name, message_text):
-        """Send a broadcast message to a botnet."""
         if botnet_name not in self.my_botnets:
             return False
         
@@ -356,7 +347,6 @@ class BotNet(callbacks.Plugin):
         return True
 
     def get_status_response(self):
-        """Generate status response for STATUS_QUERY."""
         return {
             "type": STATUS_RESPONSE,
             "bot_name": self.irc.nick,
@@ -367,15 +357,15 @@ class BotNet(callbacks.Plugin):
             "uptime": time.time() - self.start_time
         }
 
-    # Partyline Commands - with manual argument handling
+    # Partyline Commands
     
     def bwho(self, irc, msg, args):
         """Show online users in the mesh."""
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
-        if identifier not in self.partyline_users:
+        account = self._get_user_account(irc, msg)
+        if not account or account not in self.partyline_users:
             irc.reply("Not in partyline mode. Type 'partyline' first.", private=True)
             return
         
@@ -387,14 +377,15 @@ class BotNet(callbacks.Plugin):
                 botnets = peer_info.get('botnets', ['Nest'])
                 irc.reply(f"  {peer.bot_name} - {', '.join(botnets)}", private=True)
         irc.reply(f"Total: {len(self.peers) + 1} users online", private=True)
+    bwho = wrap(bwho)
 
     def bmap(self, irc, msg, args):
         """Show mesh topology."""
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
-        if identifier not in self.partyline_users:
+        account = self._get_user_account(irc, msg)
+        if not account or account not in self.partyline_users:
             irc.reply("Not in partyline mode. Type 'partyline' first.", private=True)
             return
         
@@ -407,24 +398,28 @@ class BotNet(callbacks.Plugin):
                 irc.reply(f"     └─ {peer.bot_name} - {', '.join(botnets)}", private=True)
         if not self.peers:
             irc.reply("     └─ (no connected peers)", private=True)
+    bmap = wrap(bmap)
 
     def bcast(self, irc, msg, args):
         """<botnet> <message> -- Broadcast a message to a botnet."""
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
-        if identifier not in self.partyline_users:
+        account = self._get_user_account(irc, msg)
+        if not account or account not in self.partyline_users:
             irc.reply("Not in partyline mode. Type 'partyline' first.", private=True)
             return
         
-        # args is a list of arguments
-        if not args or len(args) < 2:
+        if not args:
             irc.reply("Usage: bcast <botnet> <message>", private=True)
             return
         
-        botnet = args[0]
-        message = ' '.join(args[1:])  # Join the rest of the arguments as the message
+        parts = args.split(' ', 1)
+        if len(parts) != 2:
+            irc.reply("Usage: bcast <botnet> <message>", private=True)
+            return
+        
+        botnet, message = parts
         
         if botnet not in self.my_botnets:
             irc.reply(f"Not in botnet '{botnet}'. Your botnets: {', '.join(self.my_botnets)}", private=True)
@@ -432,27 +427,29 @@ class BotNet(callbacks.Plugin):
         
         self.broadcast(botnet, message)
         irc.reply(f"[{botnet}] You: {message}", private=True)
+    bcast = wrap(bcast, ['text'])
 
     def bquit(self, irc, msg, args):
         """Exit partyline mode."""
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
-        if identifier not in self.partyline_users:
+        account = self._get_user_account(irc, msg)
+        if not account or account not in self.partyline_users:
             irc.reply("Not in partyline mode.", private=True)
             return
         
-        self.partyline_users.pop(identifier, None)
+        self.partyline_users.pop(account, None)
         irc.reply("Leaving partyline. Type 'partyline' to return.", private=True)
+    bquit = wrap(bquit)
 
     def bhelp(self, irc, msg, args):
         """Show partyline help."""
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
-        if identifier not in self.partyline_users:
+        account = self._get_user_account(irc, msg)
+        if not account or account not in self.partyline_users:
             irc.reply("Not in partyline mode. Type 'partyline' first.", private=True)
             return
         
@@ -463,11 +460,12 @@ class BotNet(callbacks.Plugin):
         irc.reply("  bquit                  - Exit partyline", private=True)
         irc.reply("  bhelp                  - Show this help", private=True)
         irc.reply(f"Your botnets: {', '.join(self.my_botnets)}", private=True)
+    bhelp = wrap(bhelp)
 
     # IRC Commands
     
     def mykey(self, irc, msg, args):
-        """Show your bot's full public keys for sharing with other bots."""
+        """Show your bot's full public keys for sharing."""
         if not self._check_owner(irc, msg):
             return
         irc.reply(f"Signing key: {self.pubkey_signing}", private=True)
@@ -500,8 +498,6 @@ class BotNet(callbacks.Plugin):
     status = wrap(status)
 
     def trust(self, irc, msg, args, pubkey, optional_botnets=None):
-        """<pubkey> [botnet1,botnet2] -- Trust a remote bot's public key.
-        The bot is always added to 'Nest' by default. Optional botnets can be specified as comma-separated list."""
         if not self._check_owner(irc, msg):
             return
 
@@ -522,7 +518,6 @@ class BotNet(callbacks.Plugin):
     trust = wrap(trust, ['text', optional('text')])
 
     def untrust(self, irc, msg, args, pubkey):
-        """<pubkey> -- Remove trust from a remote bot's public key."""
         if not self._check_owner(irc, msg):
             return
 
@@ -541,7 +536,6 @@ class BotNet(callbacks.Plugin):
     untrust = wrap(untrust, ['text'])
 
     def list_trusted(self, irc, msg, args):
-        """List all trusted peers."""
         if not self._check_owner(irc, msg):
             return
 
@@ -557,7 +551,6 @@ class BotNet(callbacks.Plugin):
     list_trusted = wrap(list_trusted)
 
     def listen(self, irc, msg, args, port):
-        """<port> -- Start BotNet listener on specified port."""
         if not self._check_owner(irc, msg):
             return
 
@@ -584,7 +577,6 @@ class BotNet(callbacks.Plugin):
     listen = wrap(listen, ['int'])
 
     def stop(self, irc, msg, args):
-        """Stop the BotNet listener."""
         if not self._check_owner(irc, msg):
             return
 
@@ -598,7 +590,6 @@ class BotNet(callbacks.Plugin):
     stop = wrap(stop)
 
     def connect(self, irc, msg, args, hostport):
-        """<host:port> -- Connect to a BotNet peer (example: 192.168.1.100:4557)."""
         try:
             if ':' not in hostport:
                 irc.reply("Usage: host:port (example: 192.168.1.100:4557)", private=True)
@@ -625,7 +616,6 @@ class BotNet(callbacks.Plugin):
     connect = wrap(connect, ['text'])
 
     def leavenest(self, irc, msg, args):
-        """Leave the Nest botnet. You will no longer receive Nest broadcasts."""
         if not self._check_owner(irc, msg):
             return
         
@@ -638,7 +628,6 @@ class BotNet(callbacks.Plugin):
     leavenest = wrap(leavenest)
 
     def joinnest(self, irc, msg, args):
-        """Join the Nest botnet (default botnet for all trusted bots)."""
         if not self._check_owner(irc, msg):
             return
         
@@ -655,19 +644,23 @@ class BotNet(callbacks.Plugin):
         if not self._check_owner(irc, msg):
             return
         
-        identifier = self._get_user_identifier(irc, msg)
+        # Require NickServ identification
+        account = self._get_user_account(irc, msg)
+        if not account:
+            irc.reply("You must be identified to NickServ to use partyline.", private=True)
+            return
         
-        if identifier in self.partyline_users:
-            irc.reply(f"Already in partyline mode. Use 'bquit' to exit.", private=True)
+        if account in self.partyline_users:
+            irc.reply(f"Already in partyline mode as {account}. Use 'bquit' to exit.", private=True)
             return
         
         # Enter partyline mode
-        self.partyline_users[identifier] = {
+        self.partyline_users[account] = {
             'nick': msg.nick,
             'last_activity': time.time()
         }
         
-        irc.reply(f"Entered partyline mode!", private=True)
+        irc.reply(f"Entered partyline mode as {account}!", private=True)
         
         # Send welcome
         irc.reply(f"=== BotNet Partyline ===", private=True)
@@ -676,7 +669,7 @@ class BotNet(callbacks.Plugin):
         irc.reply(f"Peers online: {len(self.peers)}", private=True)
         irc.reply("", private=True)
         irc.reply("Available commands:", private=True)
-        irc.reply("  bcast <botnet> <msg>  - Send message to a botnet", private=True)
+        irc.reply("  bcast <botnet> <msg>  - Send message to botnet", private=True)
         irc.reply("  bwho                   - Show online users", private=True)
         irc.reply("  bmap                   - Show mesh topology", private=True)
         irc.reply("  bquit                  - Exit partyline", private=True)
@@ -694,7 +687,7 @@ class BotNet(callbacks.Plugin):
                 irc.reply(f"[{msg_item['botnet']}] {msg_item['sender']}: {msg_item['content']}", private=True)
             irc.reply("-" * 40, private=True)
         
-        self.log.info(f"User {msg.nick} ({identifier}) entered partyline mode")
+        self.log.info(f"User {account} ({msg.nick}) entered partyline mode")
     partyline = wrap(partyline)
 
 

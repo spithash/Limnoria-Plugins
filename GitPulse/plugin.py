@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2025, Stathis Xantinidis @spithash
+# Copyright (c) 2025, Stathis Xantinidis spithash@Libera
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -501,107 +501,100 @@ class GitPulse(callbacks.Plugin):
     # Commands
     # --------------------------------------------------
 
-    def subscribe(self, irc, msg, args):
+    def subscribe(self, irc, msg, args, channel):
         """Subscribe the current channel to a GitHub repository."""
-
+        
         if not args:
             irc.reply("[GitPulse] Usage: subscribe owner/repo")
             return
-
+        
         repo = args[0]
-
-        channel = msg.args[0]
-
+        
         subscriptions = self.registryValue('subscriptions', channel)
-
+        
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
-
+        
         if repo in subscriptions:
             irc.reply(f"[GitPulse] Already subscribed to {repo}.")
             return
-
+        
         subscriptions.append(repo)
-
+        
         self.save_subscriptions(channel, subscriptions)
-
+        
         irc.reply(f"[GitPulse] Subscribed to {repo}.")
-
+        
         self.fetch_and_announce(repo, irc, msg, channel)
 
-    subscribe = wrap(subscribe, ['something'])
+    subscribe = wrap(subscribe, ['something', 'channel'])
 
-    def unsubscribe(self, irc, msg, args):
+    def unsubscribe(self, irc, msg, args, channel):
         """Unsubscribe the current channel from a GitHub repository."""
-
+        
         if not args:
             irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
             return
-
+        
         repo = args[0]
-
-        channel = msg.args[0]
-
+        
         subscriptions = self.registryValue('subscriptions', channel)
-
+        
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
-
+        
         if repo not in subscriptions:
             irc.reply(f"[GitPulse] Not subscribed to {repo}.")
             return
-
+        
         subscriptions.remove(repo)
-
+        
         self.save_subscriptions(channel, subscriptions)
-
+        
         irc.reply(f"[GitPulse] Unsubscribed from {repo}.")
 
-    unsubscribe = wrap(unsubscribe, ['something'])
+    unsubscribe = wrap(unsubscribe, ['something', 'channel'])
 
-    def listgitpulse(self, irc, msg, args):
+    def listgitpulse(self, irc, msg, args, channel):
         """List subscribed repositories in the current channel."""
-
-        channel = msg.args[0]
-
+        
         subscriptions = self.registryValue('subscriptions', channel)
-
+        
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
-
+        
         if subscriptions:
             irc.reply(
                 f"[GitPulse] Subscribed repositories in {channel}: "
                 f"{', '.join(subscriptions)}"
             )
-
+        
         else:
             irc.reply(f"[GitPulse] No subscribed repositories in {channel}.")
 
-    listgitpulse = wrap(listgitpulse)
+    listgitpulse = wrap(listgitpulse, ['channel'])
 
-    @wrap(['owner'])
-    def fetchgitpulse(self, irc, msg, args):
+    def fetchgitpulse(self, irc, msg, args, channel):
         """Manually fetch updates for all subscribed repositories."""
-
-        channel = msg.args[0]
-
+        
         subscriptions = self.registryValue('subscriptions', channel)
-
+        
         if isinstance(subscriptions, str):
             subscriptions = subscriptions.split()
-
+        
         if not subscriptions:
             irc.reply(f"[GitPulse] No subscribed repositories in {channel}.")
             return
-
+        
         irc.reply(
             f"[GitPulse] Fetching updates for "
             f"{len(subscriptions)} repositories."
         )
-
+        
         for repo in subscriptions:
             self.fetch_and_announce(repo, irc, msg, channel)
+
+    fetchgitpulse = wrap(fetchgitpulse, ['owner', 'channel'])
 
     # --------------------------------------------------
     # Helpers

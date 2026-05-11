@@ -59,6 +59,7 @@ from .peer import Peer
 
 
 class BotNet(callbacks.Plugin):
+    """Decentralized encrypted peer-to-peer mesh network for Limnoria IRC bots."""
     threaded = True
 
     def __init__(self, irc):

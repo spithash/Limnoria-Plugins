@@ -1,5 +1,5 @@
 ###
-# Copyright (c) 2025, Stathis Xantinidis spithash@Libera
+# Copyright (c) 2025, Stathis Xantinidis @spithash
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
 
 import requests
 from threading import Thread, Event
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 from supybot import callbacks, ircmsgs
 from supybot.commands import wrap
@@ -56,9 +56,9 @@ class GitPulse(callbacks.Plugin):
         self.etags = {}
         self.last_modifieds = {}
 
-        # Deduplication caches
-        self.seen_events = deque(maxlen=10000)
-        self.seen_commits = deque(maxlen=10000)
+        # Deduplication caches with timestamps
+        self.seen_events = {}  # event_id -> timestamp
+        self.seen_commits = {}  # commit_sha -> timestamp
 
         # Logging colors
         self.TAG = Style.BRIGHT + Fore.WHITE + "[GitPulse]" + Style.RESET_ALL
@@ -127,6 +127,24 @@ class GitPulse(callbacks.Plugin):
 
         self.log_info("Polling thread stopped.")
 
+    def clean_old_caches(self):
+        """Remove items older than 1 hour from caches."""
+        now = datetime.utcnow()
+        one_hour_ago = now - timedelta(hours=1)
+        
+        # Clean events cache
+        old_events = [eid for eid, ts in self.seen_events.items() if ts < one_hour_ago]
+        for eid in old_events:
+            del self.seen_events[eid]
+        
+        # Clean commits cache
+        old_commits = [cid for cid, ts in self.seen_commits.items() if ts < one_hour_ago]
+        for cid in old_commits:
+            del self.seen_commits[cid]
+        
+        if old_events or old_commits:
+            self.log_debug(f"Cleaned {len(old_events)} events and {len(old_commits)} commits from cache")
+
     def poll(self):
         """Main polling loop."""
 
@@ -134,6 +152,9 @@ class GitPulse(callbacks.Plugin):
 
             try:
                 self.log_info("Polling repositories...")
+                
+                # Clean old cache entries
+                self.clean_old_caches()
 
                 channels = list(self.irc.state.channels.keys()) if self.irc.state.channels else []
 
@@ -143,7 +164,9 @@ class GitPulse(callbacks.Plugin):
                         subscriptions = self.registryValue('subscriptions', channel)
 
                         if isinstance(subscriptions, str):
-                            subscriptions = subscriptions.split()
+                            subscriptions = subscriptions.split() if subscriptions else []
+                        elif subscriptions is None:
+                            subscriptions = []
 
                         for repo in subscriptions:
 
@@ -260,6 +283,29 @@ class GitPulse(callbacks.Plugin):
 
         self.fetch_and_announce_commits(repo, irc, msg, channel)
 
+    def is_recent(self, timestamp_str):
+        """Check if an ISO timestamp is within the last 20 minutes."""
+        if not timestamp_str:
+            return True
+        
+        try:
+            # Parse GitHub's ISO timestamp format
+            if timestamp_str.endswith('Z'):
+                timestamp_str = timestamp_str[:-1] + '+00:00'
+            
+            event_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Convert to naive UTC for comparison
+            if event_time.tzinfo:
+                event_time = event_time.replace(tzinfo=None)
+            
+            now = datetime.utcnow()
+            twenty_minutes_ago = now - timedelta(minutes=20)
+            
+            return event_time > twenty_minutes_ago
+        except Exception as e:
+            self.log_debug(f"Failed to parse timestamp {timestamp_str}: {e}")
+            return True  # Assume recent if we can't parse
+
     def process_events(self, events, repo, irc, msg, channel):
         """Process GitHub events."""
 
@@ -269,14 +315,22 @@ class GitPulse(callbacks.Plugin):
 
             try:
                 event_id = event.get('id')
+                created_at = event.get('created_at')
 
                 if not event_id:
                     continue
+                
+                # Check if event is recent (within 20 minutes)
+                if not self.is_recent(created_at):
+                    self.log_debug(f"Skipping old event {event_id} from {created_at}")
+                    continue
 
+                # Check if we've already seen this event
                 if event_id in self.seen_events:
                     continue
 
-                self.seen_events.append(event_id)
+                # Store with timestamp
+                self.seen_events[event_id] = datetime.utcnow()
 
                 event_type = event.get('type')
 
@@ -335,14 +389,22 @@ class GitPulse(callbacks.Plugin):
 
             try:
                 sha = commit.get('sha')
+                commit_date = commit.get('commit', {}).get('committer', {}).get('date')
 
                 if not sha:
                     continue
+                
+                # Check if commit is recent (within 20 minutes)
+                if not self.is_recent(commit_date):
+                    self.log_debug(f"Skipping old commit {sha} from {commit_date}")
+                    continue
 
+                # Check if we've already seen this commit
                 if sha in self.seen_commits:
                     continue
 
-                self.seen_commits.append(sha)
+                # Store with timestamp
+                self.seen_commits[sha] = datetime.utcnow()
 
                 event = {
                     'actor': {
@@ -501,19 +563,20 @@ class GitPulse(callbacks.Plugin):
     # Commands
     # --------------------------------------------------
 
-    def subscribe(self, irc, msg, args, channel):
+    def subscribe(self, irc, msg, args, repo):
         """Subscribe the current channel to a GitHub repository."""
         
-        if not args:
-            irc.reply("[GitPulse] Usage: subscribe owner/repo")
-            return
+        channel = msg.args[0]
         
-        repo = args[0]
+        # Get current subscriptions
+        current = self.registryValue('subscriptions', channel)
         
-        subscriptions = self.registryValue('subscriptions', channel)
-        
-        if isinstance(subscriptions, str):
-            subscriptions = subscriptions.split()
+        if isinstance(current, str):
+            subscriptions = current.split() if current else []
+        elif current is None:
+            subscriptions = []
+        else:
+            subscriptions = current if isinstance(current, list) else []
         
         if repo in subscriptions:
             irc.reply(f"[GitPulse] Already subscribed to {repo}.")
@@ -521,27 +584,29 @@ class GitPulse(callbacks.Plugin):
         
         subscriptions.append(repo)
         
-        self.save_subscriptions(channel, subscriptions)
+        # Save as space-separated string
+        self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
         
         irc.reply(f"[GitPulse] Subscribed to {repo}.")
         
         self.fetch_and_announce(repo, irc, msg, channel)
 
-    subscribe = wrap(subscribe, ['something', 'channel'])
+    subscribe = wrap(subscribe, ['something'])
 
-    def unsubscribe(self, irc, msg, args, channel):
+    def unsubscribe(self, irc, msg, args, repo):
         """Unsubscribe the current channel from a GitHub repository."""
         
-        if not args:
-            irc.reply("[GitPulse] Usage: unsubscribe owner/repo")
-            return
+        channel = msg.args[0]
         
-        repo = args[0]
+        # Get current subscriptions
+        current = self.registryValue('subscriptions', channel)
         
-        subscriptions = self.registryValue('subscriptions', channel)
-        
-        if isinstance(subscriptions, str):
-            subscriptions = subscriptions.split()
+        if isinstance(current, str):
+            subscriptions = current.split() if current else []
+        elif current is None:
+            subscriptions = []
+        else:
+            subscriptions = current if isinstance(current, list) else []
         
         if repo not in subscriptions:
             irc.reply(f"[GitPulse] Not subscribed to {repo}.")
@@ -549,19 +614,29 @@ class GitPulse(callbacks.Plugin):
         
         subscriptions.remove(repo)
         
-        self.save_subscriptions(channel, subscriptions)
+        # Save as space-separated string
+        if subscriptions:
+            self.setRegistryValue('subscriptions', ' '.join(subscriptions), channel)
+        else:
+            self.setRegistryValue('subscriptions', '', channel)
         
         irc.reply(f"[GitPulse] Unsubscribed from {repo}.")
 
-    unsubscribe = wrap(unsubscribe, ['something', 'channel'])
+    unsubscribe = wrap(unsubscribe, ['something'])
 
-    def listgitpulse(self, irc, msg, args, channel):
+    def listgitpulse(self, irc, msg, args):
         """List subscribed repositories in the current channel."""
         
-        subscriptions = self.registryValue('subscriptions', channel)
+        channel = msg.args[0]
         
-        if isinstance(subscriptions, str):
-            subscriptions = subscriptions.split()
+        current = self.registryValue('subscriptions', channel)
+        
+        if isinstance(current, str):
+            subscriptions = current.split() if current else []
+        elif current is None:
+            subscriptions = []
+        else:
+            subscriptions = current if isinstance(current, list) else []
         
         if subscriptions:
             irc.reply(
@@ -572,15 +647,21 @@ class GitPulse(callbacks.Plugin):
         else:
             irc.reply(f"[GitPulse] No subscribed repositories in {channel}.")
 
-    listgitpulse = wrap(listgitpulse, ['channel'])
+    listgitpulse = wrap(listgitpulse)
 
-    def fetchgitpulse(self, irc, msg, args, channel):
+    def fetchgitpulse(self, irc, msg, args):
         """Manually fetch updates for all subscribed repositories."""
         
-        subscriptions = self.registryValue('subscriptions', channel)
+        channel = msg.args[0]
         
-        if isinstance(subscriptions, str):
-            subscriptions = subscriptions.split()
+        current = self.registryValue('subscriptions', channel)
+        
+        if isinstance(current, str):
+            subscriptions = current.split() if current else []
+        elif current is None:
+            subscriptions = []
+        else:
+            subscriptions = current if isinstance(current, list) else []
         
         if not subscriptions:
             irc.reply(f"[GitPulse] No subscribed repositories in {channel}.")
@@ -594,20 +675,7 @@ class GitPulse(callbacks.Plugin):
         for repo in subscriptions:
             self.fetch_and_announce(repo, irc, msg, channel)
 
-    fetchgitpulse = wrap(fetchgitpulse, ['owner', 'channel'])
-
-    # --------------------------------------------------
-    # Helpers
-    # --------------------------------------------------
-
-    def save_subscriptions(self, channel, subscriptions):
-        """Save repository subscriptions."""
-
-        self.setRegistryValue(
-            'subscriptions',
-            ' '.join(subscriptions),
-            channel
-        )
+    fetchgitpulse = wrap(fetchgitpulse, ['owner'])
 
     # --------------------------------------------------
     # Shutdown

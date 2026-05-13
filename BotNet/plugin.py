@@ -494,6 +494,10 @@ class BotNet(callbacks.Plugin):
     # Seen plugin integration - Public command
     def bseen(self, irc, msg, args, nick):
         """<nick> -- Show when a nick was last seen across the entire botnet."""
+        # Check if publicSeen is enabled, otherwise require owner
+        if not self.registryValue('publicSeen') and not self._check_owner(irc, msg):
+            return
+        
         local_result = self._check_local_seen(nick)
         
         # Determine where to send the response (channel or private)

@@ -77,5 +77,8 @@ conf.registerGlobalValue(BotNet, 'maxReconnectAttempts',
 conf.registerGlobalValue(BotNet, 'reconnectDelay',
     registry.PositiveInteger(60, _("""Seconds to wait between reconnection attempts.""")))
 
+conf.registerGlobalValue(BotNet, 'autoListen',
+    registry.Boolean(False, _("""Automatically start listener on plugin load using last used port.""")))
+
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

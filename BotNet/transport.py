@@ -3,7 +3,11 @@ import threading
 import time
 
 from .protocol import pack_message, unpack_message, create_handshake_message, create_handshake_ack
-from .messages import HELLO, PING, PONG, BROADCAST, STATUS_QUERY, STATUS_RESPONSE, PROTOCOL_VERSION, ReplayProtectionManager
+from .messages import (
+    HELLO, PING, PONG, BROADCAST, STATUS_QUERY, STATUS_RESPONSE, 
+    PROTOCOL_VERSION, PARTYLINE_USERS_SYNC, PARTYLINE_USER_LEFT, 
+    PARTYLINE_USERS_REQUEST, SEEN_QUERY, SEEN_RESPONSE
+)
 from .crypto import EncryptionManager
 
 
@@ -46,7 +50,7 @@ class BotNetListener(threading.Thread):
             self.sock.listen(5)
             self.sock.settimeout(1)
 
-            self.plugin.log.info(f"BotNet encrypted listener on {self.host}:{self.port}")
+            self.plugin.log.info(f"BotNet encrypted listener started on {self.host}:{self.port}")
 
             while self.running:
                 try:
@@ -97,7 +101,7 @@ class BotNetListener(threading.Thread):
         try:
             # Step 1: Receive HELLO (plaintext) with short timeout
             client.settimeout(30)
-            message = unpack_message(client, timeout=30, max_size=4096)  # Small max for handshake
+            message = unpack_message(client, timeout=30, max_size=4096)
             
             if not message or message.get("type") != HELLO:
                 self.plugin.log.info(f"Invalid handshake from {addr}")
@@ -153,6 +157,9 @@ class BotNetListener(threading.Thread):
             # Store by signing pubkey
             self.plugin.peers[peer_signing_pubkey] = peer
             
+            # Sync partyline users with new peer
+            self.plugin._sync_partyline_with_peer(peer_signing_pubkey)
+            
             # Notify partyline about new peer
             self.plugin._notify_partyline_peer_joined(peer_bot_name)
             
@@ -168,23 +175,29 @@ class BotNetListener(threading.Thread):
             if peer_signing_pubkey and peer_signing_pubkey in self.plugin.peers:
                 if peer_bot_name:
                     self.plugin._notify_partyline_peer_left(peer_bot_name)
+                
+                peer_info = self.plugin.trusted_peers.get(peer_signing_pubkey, {})
                 del self.plugin.peers[peer_signing_pubkey]
-                # Clean up replay cache for this peer
+                
                 if hasattr(self.plugin, 'replay_manager'):
                     self.plugin.replay_manager.cleanup_sender(peer_signing_pubkey)
+                
+                if self.plugin.registryValue('autoReconnect') and peer_info.get('host') and peer_info.get('port'):
+                    self.plugin.log.info(f"Scheduling reconnection to {peer_bot_name or peer_signing_pubkey[:16]} in {self.plugin.registryValue('reconnectDelay')}s")
+                    self.plugin._schedule_peer_reconnect(peer_signing_pubkey, peer_info, peer_bot_name)
+            
             self.plugin.log.info(f"Connection closed from {addr}")
 
     def _receive_loop(self, sock, peer, encryption_manager):
         """Receive encrypted messages from connected peer"""
-        heartbeat_timeout = 90
+        heartbeat_timeout = self.plugin.registryValue('heartbeatTimeout')
         
         while self.running and peer.pubkey_signing in self.plugin.peers:
             try:
-                # Use peer's encryption box for decryption with reasonable timeout
                 message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50, max_size=10*1024*1024)
                 
                 if not message:
-                    self.plugin.log.info(f"Peer {peer.bot_name} disconnected")
+                    self.plugin.log.info(f"Peer {peer.bot_name} disconnected (connection closed)")
                     break
                 
                 msg_type = message.get("type")
@@ -205,6 +218,21 @@ class BotNetListener(threading.Thread):
                     status_response = self.plugin.get_status_response()
                     encrypted_response = pack_message(status_response, encryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing))
                     sock.sendall(encrypted_response)
+                
+                elif msg_type == PARTYLINE_USERS_SYNC:
+                    self.plugin._handle_partyline_users_sync(message, from_peer=peer.pubkey_signing)
+                    
+                elif msg_type == PARTYLINE_USER_LEFT:
+                    self.plugin._handle_partyline_user_left(message)
+                    
+                elif msg_type == PARTYLINE_USERS_REQUEST:
+                    self.plugin._handle_partyline_users_request(message, from_peer=peer.pubkey_signing)
+                    
+                elif msg_type == SEEN_QUERY:
+                    self.plugin._handle_seen_query(message, from_peer=peer.pubkey_signing)
+                    
+                elif msg_type == SEEN_RESPONSE:
+                    self.plugin._handle_seen_response(message)
                     
                 else:
                     self.plugin.log.debug(f"Unknown message type {msg_type} from {peer.bot_name}")
@@ -214,20 +242,37 @@ class BotNetListener(threading.Thread):
                     self.plugin.log.warning(f"Peer {peer.bot_name} timed out (no PONG for {heartbeat_timeout}s)")
                     break
                 continue
+            except ConnectionError as e:
+                self.plugin.log.warning(f"Connection error from {peer.bot_name}: {e}")
+                break
             except Exception as e:
                 self.plugin.log.error(f"Error in receive loop from {peer.bot_name}: {e}")
                 break
+        
+        if peer.pubkey_signing in self.plugin.peers:
+            self.plugin.log.info(f"Disconnected from {peer.bot_name}")
+            self.plugin._notify_partyline_peer_left(peer.bot_name)
+            peer_info = self.plugin.trusted_peers.get(peer.pubkey_signing, {})
+            peer_bot_name = peer.bot_name
+            del self.plugin.peers[peer.pubkey_signing]
+            if hasattr(self.plugin, 'replay_manager'):
+                self.plugin.replay_manager.cleanup_sender(peer.pubkey_signing)
+            
+            if self.plugin.registryValue('autoReconnect') and peer_info.get('host') and peer_info.get('port'):
+                self.plugin.log.info(f"Scheduling reconnection to {peer_bot_name or peer.pubkey_signing[:16]} in {self.plugin.registryValue('reconnectDelay')}s")
+                self.plugin._schedule_peer_reconnect(peer.pubkey_signing, peer_info, peer_bot_name)
 
     def stop(self):
         self.running = False
-        for handler in self.active_handlers[:50]:  # Limit join time
-            if handler.is_alive():
-                handler.join(timeout=1)
         if self.sock:
             try:
                 self.sock.close()
             except Exception:
                 pass
+        time.sleep(0.5)
+        for handler in self.active_handlers[:50]:
+            if handler.is_alive():
+                handler.join(timeout=1)
         self.plugin.log.info("BotNet listener stopped")
 
 
@@ -236,15 +281,13 @@ class BotNetClient:
         self.plugin = plugin
 
     def connect(self, host, port, peer_signing_pubkey=None):
-        """Connect to a peer with encrypted handshake"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(30)  # Overall connection timeout
+        sock.settimeout(30)
         
         try:
             sock.connect((host, port))
             self.plugin.log.info(f"Connected to {host}:{port}")
             
-            # Send HELLO (plaintext)
             hello = create_handshake_message(
                 bot_name=self.plugin.irc.nick,
                 pubkey_signing=self.plugin.pubkey_signing,
@@ -253,7 +296,6 @@ class BotNetClient:
             )
             sock.sendall(pack_message(hello))
             
-            # Wait for ACK (plaintext)
             response = unpack_message(sock, timeout=30, max_size=4096)
             
             if response and response.get("type") == "hello_ack" and response.get("status") == "accepted":
@@ -261,13 +303,11 @@ class BotNetClient:
                 peer_encryption = response.get("pubkey_encryption")
                 peer_bot_name = response.get("bot_name")
                 
-                # Check if trusted
                 if not self.plugin.is_trusted(peer_signing):
                     self.plugin.log.info(f"Peer {peer_signing[:16]}... not trusted, disconnecting")
                     sock.close()
                     return False
                 
-                # Update peer info
                 if peer_signing in self.plugin.trusted_peers:
                     if not self.plugin.trusted_peers[peer_signing].get('host'):
                         self.plugin.trusted_peers[peer_signing]['host'] = host
@@ -275,7 +315,6 @@ class BotNetClient:
                         self.plugin.trusted_peers[peer_signing]['bot_name'] = peer_bot_name
                         self.plugin._save_trusted_peers()
                 
-                # Create encryption manager
                 encryption_manager = EncryptionManager(self.plugin.encryption_private_key)
                 encryption_manager.add_peer(peer_signing, peer_encryption)
                 
@@ -288,13 +327,13 @@ class BotNetClient:
                 peer.encryption_manager = encryption_manager
                 peer.last_pong = time.time()
                 
-                # Store by signing pubkey
                 self.plugin.peers[peer_signing] = peer
                 
-                # Notify partyline about new peer
+                # Sync partyline users with new peer
+                self.plugin._sync_partyline_with_peer(peer_signing)
+                
                 self.plugin._notify_partyline_peer_joined(peer_bot_name)
                 
-                # Start encrypted receive thread
                 receive_thread = threading.Thread(
                     target=self._receive_loop,
                     args=(sock, peer, encryption_manager),
@@ -315,14 +354,14 @@ class BotNetClient:
             return False
 
     def _receive_loop(self, sock, peer, encryption_manager):
-        """Receive encrypted messages"""
-        heartbeat_timeout = 90
+        heartbeat_timeout = self.plugin.registryValue('heartbeatTimeout')
         
         while peer.pubkey_signing in self.plugin.peers:
             try:
                 message = unpack_message(sock, decryption_box=encryption_manager.peer_boxes.get(peer.pubkey_signing), timeout=50, max_size=10*1024*1024)
                 
                 if not message:
+                    self.plugin.log.info(f"Peer {peer.bot_name} disconnected (connection closed)")
                     break
                 
                 msg_type = message.get("type")
@@ -336,19 +375,38 @@ class BotNetClient:
                     peer.last_pong = time.time()
                 elif msg_type == BROADCAST:
                     self.plugin.handle_broadcast(message, from_peer=peer.pubkey_signing)
+                elif msg_type == PARTYLINE_USERS_SYNC:
+                    self.plugin._handle_partyline_users_sync(message, from_peer=peer.pubkey_signing)
+                elif msg_type == PARTYLINE_USER_LEFT:
+                    self.plugin._handle_partyline_user_left(message)
+                elif msg_type == PARTYLINE_USERS_REQUEST:
+                    self.plugin._handle_partyline_users_request(message, from_peer=peer.pubkey_signing)
+                elif msg_type == SEEN_QUERY:
+                    self.plugin._handle_seen_query(message, from_peer=peer.pubkey_signing)
+                elif msg_type == SEEN_RESPONSE:
+                    self.plugin._handle_seen_response(message)
                     
             except socket.timeout:
                 if time.time() - peer.last_pong > heartbeat_timeout:
+                    self.plugin.log.warning(f"Peer {peer.bot_name} timed out (no PONG for {heartbeat_timeout}s)")
                     break
                 continue
+            except ConnectionError as e:
+                self.plugin.log.warning(f"Connection error from {peer.bot_name}: {e}")
+                break
             except Exception as e:
                 self.plugin.log.error(f"Receive loop error for {peer.bot_name}: {e}")
                 break
         
-        # Clean up on disconnect
         if peer.pubkey_signing in self.plugin.peers:
+            self.plugin.log.info(f"Disconnected from {peer.bot_name}")
             self.plugin._notify_partyline_peer_left(peer.bot_name)
+            peer_info = self.plugin.trusted_peers.get(peer.pubkey_signing, {})
+            peer_bot_name = peer.bot_name
             del self.plugin.peers[peer.pubkey_signing]
-            # Clean up replay cache for this peer
             if hasattr(self.plugin, 'replay_manager'):
                 self.plugin.replay_manager.cleanup_sender(peer.pubkey_signing)
+            
+            if self.plugin.registryValue('autoReconnect') and peer_info.get('host') and peer_info.get('port'):
+                self.plugin.log.info(f"Scheduling reconnection to {peer_bot_name or peer.pubkey_signing[:16]} in {self.plugin.registryValue('reconnectDelay')}s")
+                self.plugin._schedule_peer_reconnect(peer.pubkey_signing, peer_info, peer_bot_name)

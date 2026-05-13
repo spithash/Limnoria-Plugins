@@ -12,6 +12,14 @@ PARTYLINE_CMD = "partyline_cmd"
 PARTYLINE_MSG = "partyline_msg"
 STATUS_QUERY = "status_query"
 STATUS_RESPONSE = "status_response"
+PARTYLINE_JOIN = "partyline_join"
+PARTYLINE_LEAVE = "partyline_leave"
+PARTYLINE_USERS = "partyline_users"
+PARTYLINE_USER_LEFT = "partyline_user_left"
+PARTYLINE_USERS_SYNC = "partyline_users_sync"
+PARTYLINE_USERS_REQUEST = "partyline_users_request"
+SEEN_QUERY = "seen_query"
+SEEN_RESPONSE = "seen_response"
 
 PROTOCOL_VERSION = 1
 SUPPORTED_VERSIONS = [1]

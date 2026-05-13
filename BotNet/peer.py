@@ -13,6 +13,10 @@ class Peer:
         self.connected = False
         self.last_pong = time.time()
         self.last_seen = time.time()
+        
+        # Reconnection tracking
+        self.reconnect_pending = False
+        self.reconnect_attempts = 0
 
     def __repr__(self):
         return f"<Peer {self.bot_name} ({self.address[0]}:{self.address[1]})>"

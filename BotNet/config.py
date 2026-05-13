@@ -80,5 +80,7 @@ conf.registerGlobalValue(BotNet, 'reconnectDelay',
 conf.registerGlobalValue(BotNet, 'autoListen',
     registry.Boolean(False, _("""Automatically start listener on plugin load using last used port.""")))
 
+conf.registerGlobalValue(BotNet, 'publicSeen',
+    registry.Boolean(False, _("""Allow anyone to use the bseen command.""")))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

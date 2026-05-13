@@ -491,19 +491,91 @@ class BotNet(callbacks.Plugin):
                 self.log.info(f"Removed remote user {nick} from bot {bot}")
                 self._notify_partyline_user_left(nick, bot, botnet)
 
-    # Seen plugin integration
+    # Seen plugin integration - Public command
     def bseen(self, irc, msg, args, nick):
         """<nick> -- Show when a nick was last seen across the entire botnet."""
-        if not self._check_owner(irc, msg):
-            return
-        
         local_result = self._check_local_seen(nick)
         
-        if local_result:
-            self._send_seen_response(msg.nick, msg.args[0] if msg.args else None, local_result)
+        # Determine where to send the response (channel or private)
+        target = msg.args[0] if msg.channel else msg.nick
         
-        self._query_seen_peers(nick, msg.nick, msg.args[0] if msg.args else None)
+        if local_result:
+            self._send_bseen_response(irc, target, local_result)
+        
+        self._query_bseen_peers(irc, target, nick, msg.nick, msg.channel)
     bseen = wrap(bseen, ['text'])
+
+    def _send_bseen_response(self, irc, target, message):
+        """Send a bseen response to channel or user"""
+        if not message or not message.strip():
+            return
+        try:
+            # If target is a channel, send to channel, otherwise private
+            if target.startswith('#'):
+                irc.reply(message)
+            else:
+                irc.reply(message, private=True)
+        except Exception as e:
+            self.log.error(f"Failed to send bseen response: {e}")
+
+    def _query_bseen_peers(self, irc, target, nick, requester, is_channel):
+        """Query all connected peers for seen information"""
+        query_id = f"{int(time.time())}_{nick}_{requester}"
+        
+        with self.seen_lock:
+            self.seen_queries[query_id] = {
+                'nick': nick,
+                'requester': requester,
+                'target': target,
+                'irc': irc,
+                'timestamp': time.time(),
+                'responses': [],
+                'responded_peers': set()
+            }
+        
+        query_msg = {
+            "type": SEEN_QUERY,
+            "query_id": query_id,
+            "nick": nick,
+            "requester": requester,
+            "channel": target if target.startswith('#') else None,
+            "timestamp": time.time()
+        }
+        
+        sent_count = 0
+        for pubkey, peer in self.peers.items():
+            if peer.connected:
+                try:
+                    encryption_box = peer.encryption_manager.peer_boxes.get(pubkey)
+                    if encryption_box:
+                        peer.sock.sendall(pack_message(query_msg, encryption_box=encryption_box))
+                        sent_count += 1
+                except Exception as e:
+                    self.log.error(f"Failed to send seen query to {peer.bot_name}: {e}")
+        
+        if sent_count == 0:
+            with self.seen_lock:
+                self.seen_queries.pop(query_id, None)
+            self._send_bseen_response(irc, target, f"No other bots available to query for {nick}.")
+        
+        threading.Timer(10.0, self._bseen_query_timeout, args=[query_id]).start()
+
+    def _bseen_query_timeout(self, query_id):
+        """Handle bseen query timeout"""
+        with self.seen_lock:
+            if query_id not in self.seen_queries:
+                return
+            
+            query = self.seen_queries.pop(query_id)
+            responses = query.get('responses', [])
+            target = query.get('target')
+            irc = query.get('irc')
+            nick = query.get('nick')
+            
+            if responses:
+                self._send_bseen_response(irc, target, f"Searching for {nick} across the botnet...")
+                for response in responses:
+                    self._send_bseen_response(irc, target, response)
 
     def _check_local_seen(self, nick):
         """Check local Seen plugin for a nick"""
@@ -536,73 +608,6 @@ class BotNet(callbacks.Plugin):
         except Exception as e:
             self.log.error(f"Failed to check local seen: {e}")
             return None
-
-    def _send_seen_response(self, target, channel, message):
-        """Send a seen response to a user"""
-        if not message or not message.strip():
-            return
-        try:
-            self.irc.sendMsg(ircmsgs.privmsg(target, message))
-        except Exception as e:
-            self.log.error(f"Failed to send seen response: {e}")
-
-    def _query_seen_peers(self, nick, requester, channel):
-        """Query all connected peers for seen information"""
-        query_id = f"{int(time.time())}_{nick}_{requester}"
-        
-        with self.seen_lock:
-            self.seen_queries[query_id] = {
-                'nick': nick,
-                'requester': requester,
-                'channel': channel,
-                'timestamp': time.time(),
-                'responses': [],
-                'responded_peers': set()
-            }
-        
-        query_msg = {
-            "type": SEEN_QUERY,
-            "query_id": query_id,
-            "nick": nick,
-            "requester": requester,
-            "channel": channel,
-            "timestamp": time.time()
-        }
-        
-        sent_count = 0
-        for pubkey, peer in self.peers.items():
-            if peer.connected:
-                try:
-                    encryption_box = peer.encryption_manager.peer_boxes.get(pubkey)
-                    if encryption_box:
-                        peer.sock.sendall(pack_message(query_msg, encryption_box=encryption_box))
-                        sent_count += 1
-                except Exception as e:
-                    self.log.error(f"Failed to send seen query to {peer.bot_name}: {e}")
-        
-        if sent_count == 0:
-            with self.seen_lock:
-                self.seen_queries.pop(query_id, None)
-            self._send_seen_response(requester, channel, f"No other bots available to query for {nick}.")
-        
-        threading.Timer(10.0, self._seen_query_timeout, args=[query_id]).start()
-
-    def _seen_query_timeout(self, query_id):
-        """Handle seen query timeout"""
-        with self.seen_lock:
-            if query_id not in self.seen_queries:
-                return
-            
-            query = self.seen_queries.pop(query_id)
-            responses = query.get('responses', [])
-            requester = query.get('requester')
-            channel = query.get('channel')
-            nick = query.get('nick')
-            
-            if responses:
-                self._send_seen_response(requester, channel, f"Searching for {nick} across the botnet...")
-                for response in responses:
-                    self._send_seen_response(requester, channel, response)
 
     def _handle_seen_query(self, message, from_peer):
         """Handle incoming seen query from another bot"""
@@ -645,7 +650,6 @@ class BotNet(callbacks.Plugin):
                 if bot_name not in query['responded_peers']:
                     query['responded_peers'].add(bot_name)
                     query['responses'].append(f"{bot_name} says: {result}")
-
 
     def broadcast(self, botnet_name, message_text):
         """Send a signed broadcast message to a botnet with timestamp."""
@@ -760,7 +764,7 @@ class BotNet(callbacks.Plugin):
             "uptime": time.time() - self.start_time
         }
 
-    # Partyline Commands
+    # Partyline Commands - All require owner
     
     def bwho(self, irc, msg, args):
         """Show online bots and all partyline users across the mesh."""
@@ -918,7 +922,7 @@ class BotNet(callbacks.Plugin):
         self._send_partyline_message(msg.nick, f"Your botnets: {', '.join(self.my_botnets)}")
     bhelp = wrap(bhelp)
 
-    # IRC Commands
+    # IRC Commands - Most require owner
     
     def mykey(self, irc, msg, args):
         """Show your bot's full public keys for sharing with other bots."""

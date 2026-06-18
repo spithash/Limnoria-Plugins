@@ -138,12 +138,8 @@ class GroqAI(callbacks.Plugin):
         # You can add formatting here if desired
         return text
 
-    @wrap(['text'])
-    def ask(self, irc, msg, args, question):
-        """<question>
-
-        Asks Groq's AI a question and replies with the answer.
-        """
+    def _process_ask(self, irc, msg, question):
+        """Internal method to process the ask command."""
         # Check if this channel is enabled
         channel = msg.args[0] if msg.args else None
         if not self._is_channel_enabled(channel):
@@ -244,6 +240,22 @@ class GroqAI(callbacks.Plugin):
         except Exception as e:
             timer.cancel()
             irc.error(f"An error occurred while querying Groq: {e}")
+
+    @wrap(['text'])
+    def ask(self, irc, msg, args, question):
+        """<question>
+
+        Asks Groq's AI a question and replies with the answer.
+        """
+        self._process_ask(irc, msg, question)
+
+    @wrap(['text'])
+    def ai(self, irc, msg, args, question):
+        """<question>
+
+        Alias for ask. Asks Groq's AI a question and replies with the answer.
+        """
+        self._process_ask(irc, msg, question)
 
     # Note: The commands below are added to the plugin's command set
     # They will be available as @groq enable, @groq disable, etc.

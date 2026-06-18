@@ -8,3 +8,4 @@
 8. Create reminders for users --> [RemindMe](https://github.com/spithash/Limnoria-Plugins/tree/main/RemindMe)
 9. Fetches recipes from TheMealDB API --> [TheMealDB](https://github.com/spithash/Limnoria-Plugins/tree/main/TheMealDB)
 10. Decentralized encrypted peer-to-peer mesh network for Limnoria IRC bots --> [BotNet](https://github.com/spithash/Limnoria-Plugins/tree/main/BotNet)
+11. Query Groq's AI models from IRC. [GroqAI](https://github.com/spithash/Limnoria-Plugins/tree/main/GroqAI) 

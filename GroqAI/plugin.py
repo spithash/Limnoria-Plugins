@@ -34,6 +34,7 @@ import supybot.ircutils as ircutils
 import supybot.ircmsgs as ircmsgs
 import supybot.callbacks as callbacks
 import supybot.registry as registry
+import supybot.ircdb as ircdb
 import groq
 import threading
 import time
@@ -50,6 +51,18 @@ class GroqAI(callbacks.Plugin):
         self._enabled_channels = set()
         # Store user request timestamps for throttling
         self._user_last_request = defaultdict(float)
+
+    def _check_owner(self, irc, msg):
+        """Check if user has owner capability."""
+        try:
+            if not ircdb.checkCapability(msg.prefix, 'owner'):
+                irc.reply("Permission denied. Only bot owners can use this command.", private=True)
+                return False
+            return True
+        except Exception as e:
+            self.log.error(f"Error checking owner capability: {e}")
+            irc.reply("Error checking permissions.", private=True)
+            return False
 
     def _load_enabled_channels(self):
         """Load enabled channels from registry."""
@@ -262,7 +275,11 @@ class GroqAI(callbacks.Plugin):
     
     @wrap([])
     def enable(self, irc, msg, args):
-        """Enable GroqAI in the current channel."""
+        """Enable GroqAI in the current channel. Only bot owners can use this."""
+        # Check if user is a bot owner
+        if not self._check_owner(irc, msg):
+            return
+        
         channel = msg.args[0] if msg.args else None
         if not channel:
             irc.error("This command must be used in a channel.")
@@ -284,7 +301,11 @@ class GroqAI(callbacks.Plugin):
 
     @wrap([])
     def disable(self, irc, msg, args):
-        """Disable GroqAI in the current channel."""
+        """Disable GroqAI in the current channel. Only bot owners can use this."""
+        # Check if user is a bot owner
+        if not self._check_owner(irc, msg):
+            return
+        
         channel = msg.args[0] if msg.args else None
         if not channel:
             irc.error("This command must be used in a channel.")
@@ -324,7 +345,11 @@ class GroqAI(callbacks.Plugin):
 
     @wrap([])
     def list(self, irc, msg, args):
-        """List all channels where GroqAI is enabled."""
+        """List all channels where GroqAI is enabled. Only bot owners can use this."""
+        # Check if user is a bot owner
+        if not self._check_owner(irc, msg):
+            return
+        
         self._load_enabled_channels()
         if self._enabled_channels:
             channels = ', '.join(sorted(self._enabled_channels))

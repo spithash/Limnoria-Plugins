@@ -83,15 +83,11 @@ conf.registerGlobalValue(GroqAI, 'dailyLimitPerUser',
 conf.registerGlobalValue(GroqAI, 'globalDailyLimit',
     registry.Integer(950, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
 
-# Input token limit per request (now used as a safety check before API call)
-conf.registerGlobalValue(GroqAI, 'maxInputTokens',
-    registry.Integer(4000, """Maximum input tokens allowed per question. Set to 0 for unlimited.""", 0, 8192))
-
-# Daily token limits (based on Groq's limits: 12K/min, 100K/day for llama-3.3-70b-versatile)
+# Daily token limits (based on Groq's per-minute limits: 12K/min, but we track daily)
 conf.registerGlobalValue(GroqAI, 'dailyTokensPerUser',
-    registry.Integer(10000, """Maximum tokens a user can use per day. Set to 0 for unlimited.""", 0, 100000))
+    registry.Integer(10000, """Maximum tokens a user can use per day. Set to 0 for unlimited.""", 0, 12000))
 
 conf.registerGlobalValue(GroqAI, 'globalDailyTokens',
-    registry.Integer(90000, """Maximum total tokens per day across all users. Set to 0 for unlimited.""", 0, 100000))
+    registry.Integer(11500, """Maximum total tokens per day across all users. Set to 0 for unlimited.""", 0, 12000))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

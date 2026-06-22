@@ -42,6 +42,7 @@ import re
 import datetime
 import json
 import os
+import httpx
 from collections import defaultdict
 
 class GroqAI(callbacks.Plugin):
@@ -62,6 +63,8 @@ class GroqAI(callbacks.Plugin):
         self._last_reset_date = datetime.datetime.now().date()
         # Data file path for persistence
         self._data_file = os.path.join(self._get_data_dir(), 'usage_data.json')
+        # Store latest rate limit info from API
+        self._rate_limits = {}
         # Load persisted data
         self._load_persisted_data()
 
@@ -206,6 +209,13 @@ class GroqAI(callbacks.Plugin):
             self._user_last_request[user] = current_time
             return True, None
 
+    def _progress_bar(self, percent, width=10):
+        """Create a simple progress bar."""
+        filled = int(percent / 100 * width)
+        empty = width - filled
+        bar = "█" * filled + "░" * empty
+        return f"[{bar}] {percent}%"
+
     def _clean_response(self, text):
         """Clean up the AI response for IRC."""
         # First, convert actual newlines to spaces (for single line responses)
@@ -232,6 +242,39 @@ class GroqAI(callbacks.Plugin):
         
         # You can add formatting here if desired
         return text
+
+    def _parse_rate_limits(self, headers):
+        """Parse rate limit headers from the response."""
+        try:
+            # Get rate limit headers (case-insensitive)
+            limit_requests = headers.get('x-ratelimit-limit-requests')
+            limit_tokens = headers.get('x-ratelimit-limit-tokens')
+            remaining_requests = headers.get('x-ratelimit-remaining-requests')
+            remaining_tokens = headers.get('x-ratelimit-remaining-tokens')
+            reset_requests = headers.get('x-ratelimit-reset-requests')
+            reset_tokens = headers.get('x-ratelimit-reset-tokens')
+            
+            # Store them
+            self._rate_limits = {
+                'limit_requests': int(limit_requests) if limit_requests else None,
+                'limit_tokens': int(limit_tokens) if limit_tokens else None,
+                'remaining_requests': int(remaining_requests) if remaining_requests else None,
+                'remaining_tokens': int(remaining_tokens) if remaining_tokens else None,
+                'reset_requests': reset_requests,
+                'reset_tokens': reset_tokens,
+            }
+            
+            self.log.info(f"Rate limits parsed: {self._rate_limits}")
+            
+            # Log warnings if we're running low
+            if remaining_requests and int(remaining_requests) < 50:
+                self.log.warning(f"Low on requests: {remaining_requests} remaining")
+            if remaining_tokens and int(remaining_tokens) < 1000:
+                self.log.warning(f"Low on tokens: {remaining_tokens} remaining")
+                
+        except Exception as e:
+            self.log.error(f"Could not parse rate limits: {e}")
+            self._rate_limits = {}
 
     def _process_ask(self, irc, msg, question):
         """Internal method to process the ask command."""
@@ -265,11 +308,6 @@ class GroqAI(callbacks.Plugin):
             global_daily_limit = self.registryValue('globalDailyLimit')
         except:
             global_daily_limit = 950  # Default: 950 total requests per day
-
-        try:
-            max_input_tokens = self.registryValue('maxInputTokens')
-        except:
-            max_input_tokens = 4000  # Default: 4000 input tokens max
             
         try:
             daily_tokens_per_user = self.registryValue('dailyTokensPerUser')
@@ -355,39 +393,49 @@ class GroqAI(callbacks.Plugin):
         timer.start()
 
         try:
-            # Initialize the Groq client with the API key
-            client = groq.Groq(api_key=api_key)
-
-            # Send the question to Groq with all configurable parameters
-            chat_completion = client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": question,
+            # Use httpx to make the request directly (so we can get headers)
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": question}],
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
                     }
-                ],
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+                )
+                
+                # Parse rate limit headers
+                self._parse_rate_limits(response.headers)
+                
+                # Check if request was successful
+                if response.status_code != 200:
+                    error_msg = response.json().get('error', {}).get('message', 'Unknown error')
+                    irc.error(f"Groq API error: {error_msg}")
+                    return
+                
+                # Parse the response
+                data = response.json()
+                answer = data['choices'][0]['message']['content']
+                
+                # Get token usage
+                usage = data.get('usage', {})
+                prompt_tokens = usage.get('prompt_tokens', 0)
+                completion_tokens = usage.get('completion_tokens', 0)
+                total_tokens = usage.get('total_tokens', 0)
 
             # Cancel the timer if it hasn't fired yet
             timer.cancel()
 
-            # Get the answer and clean it up
-            answer = chat_completion.choices[0].message.content
-            
             # Clean up the response
             answer = self._clean_response(answer)
             
-            # Get EXACT token usage from the API response
-            usage = chat_completion.usage
-            prompt_tokens = usage.prompt_tokens
-            completion_tokens = usage.completion_tokens
-            total_tokens = usage.total_tokens
-            
             # Log the token usage for debugging
-            self.log.debug(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
+            self.log.info(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
             
             # Increment daily request counters
             self._user_daily_usage[user] = self._user_daily_usage.get(user, 0) + 1
@@ -407,15 +455,12 @@ class GroqAI(callbacks.Plugin):
                 # Otherwise, reply normally (Limnoria will handle @more)
                 irc.reply(answer, prefixNick=True)
 
-        except groq.APIConnectionError as e:
+        except httpx.TimeoutException:
             timer.cancel()
-            irc.error(f"Connection error to Groq API: {e}")
-        except groq.RateLimitError as e:
+            irc.error("Connection timeout to Groq API")
+        except httpx.HTTPStatusError as e:
             timer.cancel()
-            irc.error(f"Rate limit exceeded. Please wait a moment and try again. Error: {e}")
-        except groq.APIStatusError as e:
-            timer.cancel()
-            irc.error(f"Groq API error: {e}")
+            irc.error(f"HTTP error: {e}")
         except Exception as e:
             timer.cancel()
             irc.error(f"An error occurred while querying Groq: {e}")
@@ -522,7 +567,7 @@ class GroqAI(callbacks.Plugin):
 
     @wrap([])
     def aiusage(self, irc, msg, args):
-        """Show your daily AI usage."""
+        """Show your daily AI usage and current rate limits."""
         # Reset daily counters if new day
         self._reset_daily_if_needed()
         
@@ -552,12 +597,42 @@ class GroqAI(callbacks.Plugin):
             global_tokens = self.registryValue('globalDailyTokens')
         except:
             global_tokens = 90000
+        
+        # Build a user-friendly single-line response
+        response_parts = []
+        
+        # Your personal usage
+        response_parts.append(f"You: {used}/{daily_limit} req, {tokens_used}/{daily_tokens} tok")
+        
+        # Global usage
+        response_parts.append(f"Global: {total_used}/{global_limit} req, {total_tokens}/{global_tokens} tok")
+        
+        # Groq API rate limits (from headers)
+        if self._rate_limits:
+            remaining_req = self._rate_limits.get('remaining_requests')
+            remaining_tok = self._rate_limits.get('remaining_tokens')
+            limit_req = self._rate_limits.get('limit_requests')
+            limit_tok = self._rate_limits.get('limit_tokens')
+            reset_req = self._rate_limits.get('reset_requests')
+            reset_tok = self._rate_limits.get('reset_tokens')
             
-        irc.reply(
-            f"Requests: {used}/{daily_limit} | Tokens: {tokens_used}/{daily_tokens} | "
-            f"Global: {total_used}/{global_limit} req, {total_tokens}/{global_tokens} tokens",
-            prefixNick=True
-        )
+            if remaining_req is not None and limit_req is not None:
+                req_percent = int((remaining_req / limit_req) * 100)
+                req_bar = self._progress_bar(req_percent)
+                reset_msg = f" reset {reset_req}" if reset_req else ""
+                response_parts.append(f"API Req: {remaining_req}/{limit_req} {req_bar}{reset_msg}")
+                
+            if remaining_tok is not None and limit_tok is not None:
+                tok_percent = int((remaining_tok / limit_tok) * 100)
+                tok_bar = self._progress_bar(tok_percent)
+                reset_msg = f" reset {reset_tok}" if reset_tok else ""
+                response_parts.append(f"API Tok: {remaining_tok}/{limit_tok} {tok_bar}{reset_msg}")
+        else:
+            response_parts.append("API: No data (make an @ask request)")
+        
+        # Join with | separator
+        full_message = " | ".join(response_parts)
+        irc.reply(full_message, prefixNick=True)
 
     @wrap([])
     def resetusage(self, irc, msg, args):

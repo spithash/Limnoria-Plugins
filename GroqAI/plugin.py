@@ -40,6 +40,8 @@ import threading
 import time
 import re
 import datetime
+import json
+import os
 from collections import defaultdict
 
 class GroqAI(callbacks.Plugin):
@@ -58,6 +60,68 @@ class GroqAI(callbacks.Plugin):
         self._user_daily_tokens = defaultdict(int)
         # Track date for reset
         self._last_reset_date = datetime.datetime.now().date()
+        # Data file path for persistence
+        self._data_file = os.path.join(self._get_data_dir(), 'usage_data.json')
+        # Load persisted data
+        self._load_persisted_data()
+
+    def _get_data_dir(self):
+        """Get the data directory for the plugin."""
+        # Use the bot's data directory
+        try:
+            import supybot.conf as conf
+            data_dir = conf.supybot.directories.data()
+            plugin_dir = os.path.join(data_dir, 'GroqAI')
+            if not os.path.exists(plugin_dir):
+                os.makedirs(plugin_dir)
+            return plugin_dir
+        except:
+            # Fallback to current directory
+            return os.path.dirname(os.path.abspath(__file__))
+
+    def _load_persisted_data(self):
+        """Load usage data from file."""
+        try:
+            if os.path.exists(self._data_file):
+                with open(self._data_file, 'r') as f:
+                    data = json.load(f)
+                    
+                # Load the data
+                self._user_daily_usage = defaultdict(int, data.get('user_daily_usage', {}))
+                self._user_daily_tokens = defaultdict(int, data.get('user_daily_tokens', {}))
+                
+                # Parse the saved date
+                saved_date = data.get('last_reset_date')
+                if saved_date:
+                    self._last_reset_date = datetime.datetime.strptime(saved_date, '%Y-%m-%d').date()
+                else:
+                    self._last_reset_date = datetime.datetime.now().date()
+                    
+                self.log.info(f"Loaded persisted usage data from {self._data_file}")
+            else:
+                self.log.info("No persisted usage data found, starting fresh")
+        except Exception as e:
+            self.log.error(f"Error loading persisted data: {e}")
+            # Start fresh on error
+            self._user_daily_usage = defaultdict(int)
+            self._user_daily_tokens = defaultdict(int)
+            self._last_reset_date = datetime.datetime.now().date()
+
+    def _save_persisted_data(self):
+        """Save usage data to file."""
+        try:
+            data = {
+                'user_daily_usage': dict(self._user_daily_usage),
+                'user_daily_tokens': dict(self._user_daily_tokens),
+                'last_reset_date': self._last_reset_date.strftime('%Y-%m-%d')
+            }
+            
+            with open(self._data_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            self.log.debug(f"Saved usage data to {self._data_file}")
+        except Exception as e:
+            self.log.error(f"Error saving persisted data: {e}")
 
     def _check_owner(self, irc, msg):
         """Check if user has owner capability."""
@@ -108,6 +172,8 @@ class GroqAI(callbacks.Plugin):
             self._user_daily_usage.clear()
             self._user_daily_tokens.clear()
             self._last_reset_date = today
+            # Save the reset state
+            self._save_persisted_data()
             self.log.info("Daily request and token counters reset")
 
     def _check_throttle(self, user):
@@ -339,6 +405,9 @@ class GroqAI(callbacks.Plugin):
             # Increment daily token counters
             self._user_daily_tokens[user] = self._user_daily_tokens.get(user, 0) + total_tokens
             
+            # Save the updated data
+            self._save_persisted_data()
+            
             # Send the response - Limnoria will automatically handle truncation
             # and provide the @more functionality
             if thinking_shown:
@@ -499,6 +568,21 @@ class GroqAI(callbacks.Plugin):
             f"Global: {total_used}/{global_limit} req, {total_tokens}/{global_tokens} tokens",
             prefixNick=True
         )
+
+    @wrap([])
+    def resetusage(self, irc, msg, args):
+        """Reset all usage statistics. Only bot owners can use this."""
+        # Check if user is a bot owner
+        if not self._check_owner(irc, msg):
+            return
+        
+        # Clear all usage data
+        self._user_daily_usage.clear()
+        self._user_daily_tokens.clear()
+        self._last_reset_date = datetime.datetime.now().date()
+        self._save_persisted_data()
+        
+        irc.reply("All usage statistics have been reset.", prefixNick=True)
 
 Class = GroqAI
 

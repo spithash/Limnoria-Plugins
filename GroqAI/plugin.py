@@ -39,6 +39,7 @@ import groq
 import threading
 import time
 import re
+import datetime
 from collections import defaultdict
 
 class GroqAI(callbacks.Plugin):
@@ -51,6 +52,10 @@ class GroqAI(callbacks.Plugin):
         self._enabled_channels = set()
         # Store user request timestamps for throttling
         self._user_last_request = defaultdict(float)
+        # Store daily usage per user
+        self._user_daily_usage = defaultdict(int)
+        # Track date for reset
+        self._last_reset_date = datetime.datetime.now().date()
 
     def _check_owner(self, irc, msg):
         """Check if user has owner capability."""
@@ -93,6 +98,14 @@ class GroqAI(callbacks.Plugin):
         # Always reload from registry to keep in sync across restarts
         self._load_enabled_channels()
         return channel in self._enabled_channels
+
+    def _reset_daily_if_needed(self):
+        """Reset daily counters if it's a new day."""
+        today = datetime.datetime.now().date()
+        if today != self._last_reset_date:
+            self._user_daily_usage.clear()
+            self._last_reset_date = today
+            self.log.info("Daily request counters reset")
 
     def _check_throttle(self, user):
         """Check if the user is being throttled."""
@@ -159,6 +172,9 @@ class GroqAI(callbacks.Plugin):
             irc.error(f"GroqAI is not enabled in this channel. Use {self.canonicalName()} enable to enable it.")
             return
 
+        # Reset daily counters if new day
+        self._reset_daily_if_needed()
+
         # Check throttling for the user (use hostmask or nick)
         user = msg.prefix  # Full hostmask for unique identification
         throttle_result = self._check_throttle(user)
@@ -170,6 +186,33 @@ class GroqAI(callbacks.Plugin):
                 f"You are being throttled. Please wait {remaining} seconds before using @ask again."))
             return
 
+        # Get daily limit from config
+        try:
+            daily_limit_per_user = self.registryValue('dailyLimitPerUser')
+        except:
+            daily_limit_per_user = 50  # Default: 50 requests per user per day
+            
+        try:
+            global_daily_limit = self.registryValue('globalDailyLimit')
+        except:
+            global_daily_limit = 1000  # Default: 1000 total requests per day
+
+        # Check per-user daily limit
+        if daily_limit_per_user > 0:
+            user_used = self._user_daily_usage.get(user, 0)
+            if user_used >= daily_limit_per_user:
+                irc.sendMsg(ircmsgs.notice(msg.nick, 
+                    f"You've reached your daily limit of {daily_limit_per_user} requests. Try again tomorrow."))
+                return
+
+        # Check global daily limit
+        if global_daily_limit > 0:
+            total_used = sum(self._user_daily_usage.values())
+            if total_used >= global_daily_limit:
+                irc.sendMsg(ircmsgs.notice(msg.nick, 
+                    f"The bot has reached its global daily limit of {global_daily_limit} requests. Try again tomorrow."))
+                return
+
         # Get configuration values
         try:
             api_key = self.registryValue('apiKey')
@@ -179,7 +222,7 @@ class GroqAI(callbacks.Plugin):
         try:
             model = self.registryValue('model')
         except:
-            model = 'llama-3.3-70b-versatile'
+            model = 'llama-3.1-8b-instant'
             
         # Hardcoded values (or use registry if available)
         max_tokens = 1024
@@ -231,6 +274,9 @@ class GroqAI(callbacks.Plugin):
             
             # Clean up the response
             answer = self._clean_response(answer)
+            
+            # Increment daily usage counters
+            self._user_daily_usage[user] = self._user_daily_usage.get(user, 0) + 1
             
             # Send the response - Limnoria will automatically handle truncation
             # and provide the @more functionality
@@ -356,6 +402,29 @@ class GroqAI(callbacks.Plugin):
             irc.reply(f"GroqAI is enabled in: {channels}", prefixNick=True)
         else:
             irc.reply("GroqAI is not enabled in any channels.", prefixNick=True)
+
+    @wrap([])
+    def aiusage(self, irc, msg, args):
+        """Show your daily AI usage."""
+        # Reset daily counters if new day
+        self._reset_daily_if_needed()
+        
+        user = msg.prefix
+        used = self._user_daily_usage.get(user, 0)
+        
+        try:
+            daily_limit = self.registryValue('dailyLimitPerUser')
+        except:
+            daily_limit = 50
+            
+        total_used = sum(self._user_daily_usage.values())
+        
+        try:
+            global_limit = self.registryValue('globalDailyLimit')
+        except:
+            global_limit = 1000
+            
+        irc.reply(f"Your usage: {used}/{daily_limit} | Global: {total_used}/{global_limit} requests today.", prefixNick=True)
 
 Class = GroqAI
 

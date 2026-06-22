@@ -54,8 +54,8 @@ conf.registerGlobalValue(GroqAI, 'apiKey',
 
 # Model configuration - default to the fast, free model
 conf.registerGlobalValue(GroqAI, 'model',
-    registry.String('llama-3.3-70b-versatile', """The Groq model to use. 
-Available models: llama-3.1-8b-instant, llama3-70b-8192, mixtral-8x7b-32768, gemma2-9b-it"""))
+    registry.String('llama-3.1-8b-instant', """The Groq model to use. 
+Available models: llama-3.1-8b-instant, llama-3.3-70b-versatile, llama3-70b-8192, mixtral-8x7b-32768, gemma2-9b-it"""))
 
 # Maximum tokens for the response (up to 131,072 for llama-3.1-8b-instant)
 conf.registerGlobalValue(GroqAI, 'maxTokens',
@@ -75,5 +75,12 @@ conf.registerGlobalValue(GroqAI, 'throttleSeconds',
 
 conf.registerGlobalValue(GroqAI, 'throttleEnabled',
     registry.Boolean(True, """Whether to enable per-user throttling for @ask commands."""))
+
+# Daily request limits - NEW
+conf.registerGlobalValue(GroqAI, 'dailyLimitPerUser',
+    registry.Integer(50, """Maximum number of @ask requests per user per day. Set to 0 for unlimited.""", 0, 1000))
+
+conf.registerGlobalValue(GroqAI, 'globalDailyLimit',
+    registry.Integer(1000, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

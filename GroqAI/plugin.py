@@ -56,7 +56,7 @@ class GroqAI(callbacks.Plugin):
         self._user_last_request = defaultdict(float)
         # Store daily usage per user
         self._user_daily_usage = defaultdict(int)
-        # Store daily tokens per user
+        # Store daily tokens per user (exact from API)
         self._user_daily_tokens = defaultdict(int)
         # Track date for reset
         self._last_reset_date = datetime.datetime.now().date()
@@ -206,12 +206,6 @@ class GroqAI(callbacks.Plugin):
             self._user_last_request[user] = current_time
             return True, None
 
-    def _count_tokens(self, text):
-        """Rough token counter (4 characters ≈ 1 token)."""
-        if not text:
-            return 0
-        return len(text) // 4
-
     def _clean_response(self, text):
         """Clean up the AI response for IRC."""
         # First, convert actual newlines to spaces (for single line responses)
@@ -303,14 +297,6 @@ class GroqAI(callbacks.Plugin):
                     f"The bot has reached its global daily limit of {global_daily_limit} requests. Try again tomorrow."))
                 return
 
-        # Check input token limit
-        if max_input_tokens > 0:
-            input_tokens = self._count_tokens(question)
-            if input_tokens > max_input_tokens:
-                irc.sendMsg(ircmsgs.notice(msg.nick,
-                    f"Your question is too long ({input_tokens} tokens). Maximum is {max_input_tokens} tokens. Please shorten your question."))
-                return
-
         # Check per-user daily token limit
         if daily_tokens_per_user > 0:
             user_tokens_used = self._user_daily_tokens.get(user, 0)
@@ -394,15 +380,19 @@ class GroqAI(callbacks.Plugin):
             # Clean up the response
             answer = self._clean_response(answer)
             
-            # Count tokens used (input + output)
-            input_tokens = self._count_tokens(question)
-            output_tokens = self._count_tokens(answer)
-            total_tokens = input_tokens + output_tokens
+            # Get EXACT token usage from the API response
+            usage = chat_completion.usage
+            prompt_tokens = usage.prompt_tokens
+            completion_tokens = usage.completion_tokens
+            total_tokens = usage.total_tokens
+            
+            # Log the token usage for debugging
+            self.log.debug(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
             
             # Increment daily request counters
             self._user_daily_usage[user] = self._user_daily_usage.get(user, 0) + 1
             
-            # Increment daily token counters
+            # Increment daily token counters with EXACT values from API
             self._user_daily_tokens[user] = self._user_daily_tokens.get(user, 0) + total_tokens
             
             # Save the updated data

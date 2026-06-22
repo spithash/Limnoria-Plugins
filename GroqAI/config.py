@@ -83,7 +83,7 @@ conf.registerGlobalValue(GroqAI, 'dailyLimitPerUser',
 conf.registerGlobalValue(GroqAI, 'globalDailyLimit',
     registry.Integer(950, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
 
-# Input token limit per request
+# Input token limit per request (now used as a safety check before API call)
 conf.registerGlobalValue(GroqAI, 'maxInputTokens',
     registry.Integer(4000, """Maximum input tokens allowed per question. Set to 0 for unlimited.""", 0, 8192))
 

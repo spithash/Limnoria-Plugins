@@ -54,6 +54,8 @@ class GroqAI(callbacks.Plugin):
         self._user_last_request = defaultdict(float)
         # Store daily usage per user
         self._user_daily_usage = defaultdict(int)
+        # Store daily tokens per user
+        self._user_daily_tokens = defaultdict(int)
         # Track date for reset
         self._last_reset_date = datetime.datetime.now().date()
 
@@ -104,8 +106,9 @@ class GroqAI(callbacks.Plugin):
         today = datetime.datetime.now().date()
         if today != self._last_reset_date:
             self._user_daily_usage.clear()
+            self._user_daily_tokens.clear()
             self._last_reset_date = today
-            self.log.info("Daily request counters reset")
+            self.log.info("Daily request and token counters reset")
 
     def _check_throttle(self, user):
         """Check if the user is being throttled."""
@@ -136,6 +139,12 @@ class GroqAI(callbacks.Plugin):
             # Update the last request time
             self._user_last_request[user] = current_time
             return True, None
+
+    def _count_tokens(self, text):
+        """Rough token counter (4 characters ≈ 1 token)."""
+        if not text:
+            return 0
+        return len(text) // 4
 
     def _clean_response(self, text):
         """Clean up the AI response for IRC."""
@@ -186,7 +195,7 @@ class GroqAI(callbacks.Plugin):
                 f"You are being throttled. Please wait {remaining} seconds before using @ask again."))
             return
 
-        # Get daily limit from config
+        # Get limits from config
         try:
             daily_limit_per_user = self.registryValue('dailyLimitPerUser')
         except:
@@ -195,9 +204,24 @@ class GroqAI(callbacks.Plugin):
         try:
             global_daily_limit = self.registryValue('globalDailyLimit')
         except:
-            global_daily_limit = 1000  # Default: 1000 total requests per day
+            global_daily_limit = 950  # Default: 950 total requests per day
 
-        # Check per-user daily limit
+        try:
+            max_input_tokens = self.registryValue('maxInputTokens')
+        except:
+            max_input_tokens = 4000  # Default: 4000 input tokens max
+            
+        try:
+            daily_tokens_per_user = self.registryValue('dailyTokensPerUser')
+        except:
+            daily_tokens_per_user = 10000  # Default: 10000 tokens per user per day
+            
+        try:
+            global_daily_tokens = self.registryValue('globalDailyTokens')
+        except:
+            global_daily_tokens = 90000  # Default: 90000 total tokens per day
+
+        # Check per-user daily request limit
         if daily_limit_per_user > 0:
             user_used = self._user_daily_usage.get(user, 0)
             if user_used >= daily_limit_per_user:
@@ -205,12 +229,36 @@ class GroqAI(callbacks.Plugin):
                     f"You've reached your daily limit of {daily_limit_per_user} requests. Try again tomorrow."))
                 return
 
-        # Check global daily limit
+        # Check global daily request limit
         if global_daily_limit > 0:
             total_used = sum(self._user_daily_usage.values())
             if total_used >= global_daily_limit:
                 irc.sendMsg(ircmsgs.notice(msg.nick, 
                     f"The bot has reached its global daily limit of {global_daily_limit} requests. Try again tomorrow."))
+                return
+
+        # Check input token limit
+        if max_input_tokens > 0:
+            input_tokens = self._count_tokens(question)
+            if input_tokens > max_input_tokens:
+                irc.sendMsg(ircmsgs.notice(msg.nick,
+                    f"Your question is too long ({input_tokens} tokens). Maximum is {max_input_tokens} tokens. Please shorten your question."))
+                return
+
+        # Check per-user daily token limit
+        if daily_tokens_per_user > 0:
+            user_tokens_used = self._user_daily_tokens.get(user, 0)
+            if user_tokens_used >= daily_tokens_per_user:
+                irc.sendMsg(ircmsgs.notice(msg.nick,
+                    f"You've reached your daily token limit of {daily_tokens_per_user} tokens. Try again tomorrow."))
+                return
+
+        # Check global daily token limit
+        if global_daily_tokens > 0:
+            total_tokens_used = sum(self._user_daily_tokens.values())
+            if total_tokens_used >= global_daily_tokens:
+                irc.sendMsg(ircmsgs.notice(msg.nick,
+                    f"The bot has reached its global daily token limit of {global_daily_tokens} tokens. Try again tomorrow."))
                 return
 
         # Get configuration values
@@ -280,8 +328,16 @@ class GroqAI(callbacks.Plugin):
             # Clean up the response
             answer = self._clean_response(answer)
             
-            # Increment daily usage counters
+            # Count tokens used (input + output)
+            input_tokens = self._count_tokens(question)
+            output_tokens = self._count_tokens(answer)
+            total_tokens = input_tokens + output_tokens
+            
+            # Increment daily request counters
             self._user_daily_usage[user] = self._user_daily_usage.get(user, 0) + 1
+            
+            # Increment daily token counters
+            self._user_daily_tokens[user] = self._user_daily_tokens.get(user, 0) + total_tokens
             
             # Send the response - Limnoria will automatically handle truncation
             # and provide the @more functionality
@@ -413,20 +469,36 @@ class GroqAI(callbacks.Plugin):
         
         user = msg.prefix
         used = self._user_daily_usage.get(user, 0)
+        tokens_used = self._user_daily_tokens.get(user, 0)
         
         try:
             daily_limit = self.registryValue('dailyLimitPerUser')
         except:
             daily_limit = 50
             
+        try:
+            daily_tokens = self.registryValue('dailyTokensPerUser')
+        except:
+            daily_tokens = 10000
+            
         total_used = sum(self._user_daily_usage.values())
+        total_tokens = sum(self._user_daily_tokens.values())
         
         try:
             global_limit = self.registryValue('globalDailyLimit')
         except:
-            global_limit = 1000
+            global_limit = 950
             
-        irc.reply(f"Your usage: {used}/{daily_limit} | Global: {total_used}/{global_limit} requests today.", prefixNick=True)
+        try:
+            global_tokens = self.registryValue('globalDailyTokens')
+        except:
+            global_tokens = 90000
+            
+        irc.reply(
+            f"Requests: {used}/{daily_limit} | Tokens: {tokens_used}/{daily_tokens} | "
+            f"Global: {total_used}/{global_limit} req, {total_tokens}/{global_tokens} tokens",
+            prefixNick=True
+        )
 
 Class = GroqAI
 

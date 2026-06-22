@@ -179,7 +179,7 @@ class GroqAI(callbacks.Plugin):
         try:
             model = self.registryValue('model')
         except:
-            model = 'llama-3.1-8b-instant'
+            model = 'llama-3.3-70b-versatile'
             
         # Hardcoded values (or use registry if available)
         max_tokens = 1024

@@ -76,11 +76,11 @@ conf.registerGlobalValue(GroqAI, 'throttleSeconds',
 conf.registerGlobalValue(GroqAI, 'throttleEnabled',
     registry.Boolean(True, """Whether to enable per-user throttling for @ask commands."""))
 
-# Daily request limits - NEW
+# Daily request limits
 conf.registerGlobalValue(GroqAI, 'dailyLimitPerUser',
     registry.Integer(50, """Maximum number of @ask requests per user per day. Set to 0 for unlimited.""", 0, 1000))
 
 conf.registerGlobalValue(GroqAI, 'globalDailyLimit',
-    registry.Integer(1000, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
+    registry.Integer(950, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

@@ -224,9 +224,15 @@ class GroqAI(callbacks.Plugin):
         except:
             model = 'llama-3.1-8b-instant'
             
-        # Hardcoded values (or use registry if available)
-        max_tokens = 1024
-        temperature = 0.7
+        try:
+            max_tokens = self.registryValue('maxTokens')
+        except:
+            max_tokens = 1024
+            
+        try:
+            temperature = self.registryValue('temperature')
+        except:
+            temperature = 0.7
         
         # Validate API key is set
         if not api_key:
@@ -235,7 +241,6 @@ class GroqAI(callbacks.Plugin):
 
         # Track when the request starts
         thinking_shown = False
-        thinking_timer = None
 
         # Function to show "Thinking..." after 3 seconds
         def show_thinking():
@@ -316,9 +321,6 @@ class GroqAI(callbacks.Plugin):
         """
         self._process_ask(irc, msg, question)
 
-    # Note: The commands below are added to the plugin's command set
-    # They will be available as @groq enable, @groq disable, etc.
-    
     @wrap([])
     def enable(self, irc, msg, args):
         """Enable GroqAI in the current channel. Only bot owners can use this."""

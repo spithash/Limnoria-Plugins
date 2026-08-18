@@ -54,7 +54,7 @@ conf.registerGlobalValue(GroqAI, 'apiKey',
 
 # Model configuration - default to the fast, free model
 conf.registerGlobalValue(GroqAI, 'model',
-    registry.String('llama-3.1-8b-instant', """The Groq model to use. 
+    registry.String('groq/compound-mini', """The Groq model to use. 
 Available models: llama-3.1-8b-instant, llama-3.3-70b-versatile, llama3-70b-8192, mixtral-8x7b-32768, gemma2-9b-it"""))
 
 # Maximum tokens for the response (up to 131,072 for llama-3.1-8b-instant)

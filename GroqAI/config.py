@@ -7,17 +7,17 @@
 #
 #   * Redistributions of source code must retain the above copyright notice,
 #     this list of conditions, and the following disclaimer.
-#   * Redistributions in binary form must reproduce the above copyright notice,
-#     this list of conditions, and the following disclaimer in the
+#   * Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions, and the following disclaimer in the
 #     documentation and/or other materials provided with the distribution.
-#   * Neither the name of the author of this software nor the name of
-#     contributors to this software may be used to endorse or promote products
-#     derived from this software without specific prior written consent.
+#   * Neither the name of the author of this software nor the names of its
+#     contributors may be used to endorse or promote products derived from
+#     this software without specific prior written permission.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
 # LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
 # CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
 # SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
@@ -28,66 +28,308 @@
 ###
 
 from supybot import conf, registry
+
 try:
     from supybot.i18n import PluginInternationalization
     _ = PluginInternationalization('GroqAI')
-except:
-    # Placeholder that allows to run the plugin on a bot
-    # without the i18n module
+except Exception:
+    # Placeholder that allows the plugin to run on a bot
+    # without the i18n module.
     _ = lambda x: x
 
 
 def configure(advanced):
-    # This will be called by supybot to configure this module.  advanced is
-    # a bool that specifies whether the user identified themself as an advanced
-    # user or not.  You should effect your configuration by manipulating the
-    # registry as appropriate.
+    """
+    Configure the GroqAI plugin.
+
+    This is called by Supybot/Limnoria when the plugin is configured.
+    """
     from supybot.questions import expect, anything, something, yn
+
     conf.registerPlugin('GroqAI', True)
 
 
+# Register the plugin.
 GroqAI = conf.registerPlugin('GroqAI')
 
-# API Key configuration (private, so only the bot owner can see it)
-conf.registerGlobalValue(GroqAI, 'apiKey',
-    registry.String('', """Your Groq API key. Get it from https://console.groq.com/keys.""", private=True))
 
-# Model configuration - default to the fast, free model
-conf.registerGlobalValue(GroqAI, 'model',
-    registry.String('groq/compound-mini', """The Groq model to use. 
-Available models: llama-3.1-8b-instant, llama-3.3-70b-versatile, llama3-70b-8192, mixtral-8x7b-32768, gemma2-9b-it"""))
+# =====================================================================
+# API KEY
+# =====================================================================
 
-# Maximum tokens for the response (up to 131,072 for llama-3.1-8b-instant)
-conf.registerGlobalValue(GroqAI, 'maxTokens',
-    registry.Integer(1024, """Maximum number of tokens in the response. Max 131,072 for llama-3.1-8b-instant.""", 1, 131072))
+conf.registerGlobalValue(
+    GroqAI,
+    'apiKey',
+    registry.String(
+        '',
+        _(
+            'Your Groq API key. '
+            'Get one from https://console.groq.com/keys.'
+        ),
+        private=True
+    )
+)
 
-# Temperature for response creativity (0.0 - 1.0)
-conf.registerGlobalValue(GroqAI, 'temperature',
-    registry.Float(0.7, """Temperature for response randomness. Lower = more deterministic, higher = more creative.""", 0.0, 1.0))
 
-# Store enabled channels
-conf.registerGlobalValue(GroqAI, 'enabledChannels',
-    registry.String('', """Comma-separated list of channels where GroqAI is enabled.""", private=False))
+# =====================================================================
+# MODEL
+# =====================================================================
 
-# Throttle settings - default 12 seconds
-conf.registerGlobalValue(GroqAI, 'throttleSeconds',
-    registry.Integer(12, """Number of seconds a user must wait between @ask commands. Set to 0 to disable throttling.""", 0, 3600))
+conf.registerGlobalValue(
+    GroqAI,
+    'model',
+    registry.String(
+        'groq/compound-mini',
+        _(
+            'The Groq model to use. '
+            'The default is groq/compound-mini.'
+        )
+    )
+)
 
-conf.registerGlobalValue(GroqAI, 'throttleEnabled',
-    registry.Boolean(True, """Whether to enable per-user throttling for @ask commands."""))
 
-# Daily request limits
-conf.registerGlobalValue(GroqAI, 'dailyLimitPerUser',
-    registry.Integer(50, """Maximum number of @ask requests per user per day. Set to 0 for unlimited.""", 0, 1000))
+# =====================================================================
+# MAXIMUM OUTPUT TOKENS
+# =====================================================================
 
-conf.registerGlobalValue(GroqAI, 'globalDailyLimit',
-    registry.Integer(950, """Maximum total @ask requests per day across all users. Set to 0 for unlimited.""", 0, 10000))
+conf.registerGlobalValue(
+    GroqAI,
+    'maxTokens',
+    registry.Integer(
+        5000,
+        _(
+            'Maximum number of tokens the model may generate in its '
+            'response. For groq/compound-mini, keep this at or below '
+            'the model maximum.'
+        ),
+        1,
+        8192
+    )
+)
 
-# Daily token limits (based on Groq's per-minute limits: 12K/min, but we track daily)
-conf.registerGlobalValue(GroqAI, 'dailyTokensPerUser',
-    registry.Integer(10000, """Maximum tokens a user can use per day. Set to 0 for unlimited.""", 0, 12000))
 
-conf.registerGlobalValue(GroqAI, 'globalDailyTokens',
-    registry.Integer(11500, """Maximum total tokens per day across all users. Set to 0 for unlimited.""", 0, 12000))
+# =====================================================================
+# TEMPERATURE
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'temperature',
+    registry.Float(
+        0.7,
+        _(
+            'Temperature for response randomness. '
+            'Lower values are more deterministic; higher values are '
+            'more creative.'
+        ),
+        0.0,
+        2.0
+    )
+)
+
+
+# =====================================================================
+# ENABLED CHANNELS
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'enabledChannels',
+    registry.String(
+        '',
+        _(
+            'Comma-separated list of channels where GroqAI is enabled.'
+        ),
+        private=False
+    )
+)
+
+
+# =====================================================================
+# PER-USER THROTTLING
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'throttleSeconds',
+    registry.Integer(
+        12,
+        _(
+            'Number of seconds a user must wait between @ask commands. '
+            'Set to 0 to disable the delay.'
+        ),
+        0,
+        3600
+    )
+)
+
+
+conf.registerGlobalValue(
+    GroqAI,
+    'throttleEnabled',
+    registry.Boolean(
+        True,
+        _(
+            'Whether per-user throttling is enabled for @ask commands.'
+        )
+    )
+)
+
+
+# =====================================================================
+# DAILY REQUEST LIMIT - PER USER
+#
+# These are LOCAL BOT limits.
+# They are NOT Groq API limits.
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'dailyLimitPerUser',
+    registry.Integer(
+        15,
+        _(
+            'Maximum number of @ask requests a single IRC user may '
+            'make per day. Set to 0 for unlimited.'
+        ),
+        0,
+        1000
+    )
+)
+
+
+# =====================================================================
+# DAILY REQUEST LIMIT - GLOBAL
+#
+# This is a LOCAL BOT limit.
+# Groq Free Plan RPD is separate and is reported by the API headers.
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'globalDailyLimit',
+    registry.Integer(
+        250,
+        _(
+            'Maximum total number of @ask requests allowed by this '
+            'bot per day across all users. Set to 0 for unlimited.'
+        ),
+        0,
+        10000
+    )
+)
+
+
+# =====================================================================
+# DAILY TOKEN LIMIT - PER USER
+#
+# OPTIONAL LOCAL BOT LIMIT.
+#
+# 0 = disabled.
+#
+# This is deliberately disabled by default because Groq TPM is a
+# per-minute API rate limit, not a daily token allowance.
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'dailyTokensPerUser',
+    registry.Integer(
+        0,
+        _(
+            'Optional local daily token limit per IRC user. '
+            'Set to 0 to disable. This is a bot-side policy and is '
+            'not the same as Groq TPM.'
+        ),
+        0,
+        1000000
+    )
+)
+
+
+# =====================================================================
+# DAILY TOKEN LIMIT - GLOBAL
+#
+# OPTIONAL LOCAL BOT LIMIT.
+#
+# 0 = disabled.
+#
+# Groq TPM is handled separately through the API rate-limit headers.
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'globalDailyTokens',
+    registry.Integer(
+        0,
+        _(
+            'Optional local daily token limit across all IRC users. '
+            'Set to 0 to disable. This is a bot-side policy and is '
+            'not the same as Groq TPM.'
+        ),
+        0,
+        10000000
+    )
+)
+
+
+# =====================================================================
+# MAXIMUM QUESTION SIZE
+#
+# This is specifically intended to prevent HTTP 413 errors caused by
+# excessively large requests.
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'maxQuestionChars',
+    registry.Integer(
+        12000,
+        _(
+            'Maximum number of characters allowed in an @ask question. '
+            'This protects the bot from sending excessively large HTTP '
+            'requests to Groq. Set to 0 for unlimited.'
+        ),
+        0,
+        1000000
+    )
+)
+
+
+# =====================================================================
+# HTTP REQUEST TIMEOUT
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'requestTimeout',
+    registry.Integer(
+        45,
+        _(
+            'Maximum number of seconds to wait for a Groq API request '
+            'to complete.'
+        ),
+        5,
+        300
+    )
+)
+
+
+# =====================================================================
+# PUBLIC VISIBILITY
+# =====================================================================
+
+conf.registerGlobalValue(
+    GroqAI,
+    'public',
+    registry.Boolean(
+        True,
+        _(
+            'Determines whether the GroqAI plugin is publicly visible '
+            'in Limnoria plugin listings.'
+        )
+    )
+)
+
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

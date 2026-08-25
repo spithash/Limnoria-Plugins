@@ -32,23 +32,30 @@ from supybot import conf, registry
 try:
     from supybot.i18n import PluginInternationalization
 
-    _ = PluginInternationalization('GroqAI')
+    _ = PluginInternationalization("GroqAI")
 
 except Exception:
     _ = lambda x: x
 
 
+# ----------------------------------------------------------------------
+# PLUGIN CONFIGURATION
+# ----------------------------------------------------------------------
+
+GroqAI = conf.registerPlugin(
+    "GroqAI",
+    True
+)
+
+
 def configure(advanced):
-    from supybot.questions import expect, anything, something, yn
+    """
+    Configure the GroqAI plugin.
 
-    conf.registerPlugin(
-        'GroqAI',
-        True
-    )
-
-    GroqAI = conf.registerPlugin(
-        'GroqAI'
-    )
+    The plugin configuration namespace is registered above at module
+    level so it is available to all registerGlobalValue() calls below.
+    """
+    pass
 
 
 # ----------------------------------------------------------------------
@@ -57,12 +64,12 @@ def configure(advanced):
 
 conf.registerGlobalValue(
     GroqAI,
-    'apiKey',
+    "apiKey",
     registry.String(
-        '',
+        "",
         _(
-            'Your Groq API key. '
-            'Get one from https://console.groq.com/keys.'
+            "Your Groq API key. "
+            "Get one from https://console.groq.com/keys."
         ),
         private=True
     )
@@ -71,11 +78,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'model',
+    "model",
     registry.String(
-        'groq/compound-mini',
+        "groq/compound-mini",
         _(
-            'The Groq model to use.'
+            "The Groq model to use."
         )
     )
 )
@@ -87,11 +94,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'maxQuestionChars',
+    "maxQuestionChars",
     registry.Integer(
         220,
         _(
-            'Maximum characters allowed in a question.'
+            "Maximum characters allowed in a question."
         ),
         0,
         1000000
@@ -101,12 +108,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'maxResponseChars',
+    "maxResponseChars",
     registry.Integer(
         1200,
         _(
-            'Maximum characters allowed in the final IRC response. '
-            'Set to 0 to disable the local response length limit.'
+            "Maximum characters allowed in the final IRC response. "
+            "Set to 0 to disable the local response length limit."
         ),
         0,
         1000000
@@ -120,11 +127,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'enabledChannels',
+    "enabledChannels",
     registry.String(
-        '',
+        "",
         _(
-            'Comma-separated list of channels where GroqAI is enabled.'
+            "Comma-separated list of channels where GroqAI is enabled."
         ),
         private=False
     )
@@ -137,11 +144,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'throttleSeconds',
+    "throttleSeconds",
     registry.Integer(
         12,
         _(
-            'Number of seconds a user must wait between @ask commands.'
+            "Number of seconds a user must wait between @ask commands."
         ),
         0,
         3600
@@ -151,11 +158,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'throttleEnabled',
+    "throttleEnabled",
     registry.Boolean(
         True,
         _(
-            'Whether per-user throttling is enabled.'
+            "Whether per-user throttling is enabled."
         )
     )
 )
@@ -167,12 +174,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'localRpmLimit',
+    "localRpmLimit",
     registry.Integer(
         30,
         _(
-            'Maximum number of Groq API requests the bot will '
-            'start within one rolling 60-second period.'
+            "Maximum number of Groq API requests the bot will "
+            "start within one rolling 60-second period."
         ),
         0,
         1000
@@ -186,12 +193,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'dailyLimitPerUser',
+    "dailyLimitPerUser",
     registry.Integer(
         25,
         _(
-            'Maximum successful requests per user per day. '
-            'Set to 0 to disable the per-user daily limit.'
+            "Maximum successful requests per user per day. "
+            "Set to 0 to disable the per-user daily limit."
         ),
         0,
         1000
@@ -201,12 +208,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'globalDailyLimit',
+    "globalDailyLimit",
     registry.Integer(
         250,
         _(
-            'Maximum successful requests per day across all users. '
-            'Set to 0 to disable the global daily limit.'
+            "Maximum successful requests per day across all users. "
+            "Set to 0 to disable the global daily limit."
         ),
         0,
         10000
@@ -220,12 +227,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'dailyTokensPerUser',
+    "dailyTokensPerUser",
     registry.Integer(
         0,
         _(
-            'Optional daily token limit per user. '
-            'Set to 0 to disable.'
+            "Optional daily token limit per user. "
+            "Set to 0 to disable."
         ),
         0,
         1000000
@@ -235,12 +242,12 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'globalDailyTokens',
+    "globalDailyTokens",
     registry.Integer(
         0,
         _(
-            'Optional global daily token limit. '
-            'Set to 0 to disable.'
+            "Optional global daily token limit. "
+            "Set to 0 to disable."
         ),
         0,
         10000000
@@ -254,11 +261,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'requestTimeout',
+    "requestTimeout",
     registry.Integer(
         45,
         _(
-            'Timeout in seconds for Groq API requests.'
+            "Timeout in seconds for Groq API requests."
         ),
         5,
         300
@@ -272,11 +279,11 @@ conf.registerGlobalValue(
 
 conf.registerGlobalValue(
     GroqAI,
-    'public',
+    "public",
     registry.Boolean(
         True,
         _(
-            'Determines whether the plugin is publicly visible.'
+            "Determines whether the plugin is publicly visible."
         )
     )
 )

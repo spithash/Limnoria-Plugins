@@ -1,0 +1,369 @@
+###
+# Copyright (c) 2026, Stathis Xantinidis
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#   * Redistributions of source code must retain the above copyright notice,
+#     this list of conditions, and the following disclaimer.
+#   * Redistributions in binary form must reproduce the above copyright notice,
+#     this list of conditions, and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#   * Neither the name of the author of this software nor the name of
+#     contributors to this software may be used to endorse or promote products
+#     derived from this software without specific prior written consent.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+###
+
+import datetime
+import json
+import math
+import os
+import re
+import threading
+import time
+from collections import deque
+from email.utils import parsedate_to_datetime
+
+import httpx
+from supybot import callbacks, conf, ircmsgs, ircutils
+from supybot.commands import wrap
+
+
+class DeepseekAI(callbacks.Plugin):
+    """Query DeepSeek with ai <question>; use forget to clear your context."""
+    threaded = True
+    API_URL = "https://api.deepseek.com/chat/completions"
+
+    def __init__(self, irc):
+        super().__init__(irc)
+        self._lock = threading.RLock()
+        self._requests = deque()
+        self._last_request = {}
+        self._last_notice = {}
+        self._active_users = set()
+        self._history = {}
+        self._backoff_until = 0
+        self._day = datetime.date.today().isoformat()
+        self._users = {}
+        self._attempts = 0
+        self._tokens = 0
+        self._successes = 0
+        self._data_file = os.path.join(
+            conf.supybot.directories.data(), "DeepseekAI", "usage.json")
+        self._load_usage()
+
+    def _load_usage(self):
+        try:
+            with open(self._data_file, encoding="utf-8") as stream:
+                data = json.load(stream)
+            if data["day"] == self._day:
+                users = data["users"]
+                if not isinstance(users, dict) or any(
+                    not isinstance(value, dict) or any(
+                        not isinstance(value.get(k), int) or value[k] < 0
+                        for k in ("attempts", "tokens", "successes"))
+                    for value in users.values()
+                ):
+                    raise ValueError("Invalid usage counters")
+                self._users = users
+                self._attempts = sum(v["attempts"] for v in users.values())
+                self._tokens = sum(v["tokens"] for v in users.values())
+                self._successes = sum(v["successes"] for v in users.values())
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError):
+            self.log.error("Unable to load DeepseekAI usage counters.")
+
+    def _save_usage(self):
+        # Caller holds _lock; atomic replacement prevents partial JSON files.
+        try:
+            os.makedirs(os.path.dirname(self._data_file), exist_ok=True)
+            with open(self._data_file + ".tmp", "w", encoding="utf-8") as stream:
+                json.dump({"day": self._day, "users": self._users}, stream)
+            os.replace(self._data_file + ".tmp", self._data_file)
+        except OSError:
+            self.log.error("Unable to persist DeepseekAI usage counters.")
+            return False
+        return True
+
+    def _reset_day(self):
+        today = datetime.date.today().isoformat()
+        if today != self._day:
+            self._day = today
+            self._users.clear()
+            self._attempts = self._tokens = self._successes = 0
+
+    def _keys(self, irc, msg):
+        network = ircutils.toLower(irc.network)
+        # Ignore nick changes; user@host remains stable on a connection.
+        identity = ircutils.toLower(msg.prefix.split("!", 1)[-1])
+        user = network + ":" + identity
+        target = ircutils.toLower(msg.args[0])
+        return user, (user, target if ircutils.isChannel(target) else "private")
+
+    def _notice(self, irc, msg, user, reason):
+        # Rejected floods must not generate a flood of bot notices.
+        with self._lock:
+            now = time.monotonic()
+            if now - self._last_notice.get(user, float("-inf")) < 15:
+                return
+            self._last_notice[user] = now
+        irc.queueMsg(ircmsgs.notice(msg.nick, reason))
+
+    def _reserve(self, user):
+        """Check and reserve all limits atomically. Caller holds _lock."""
+        self._reset_day()
+        now = time.monotonic()
+        while self._requests and now - self._requests[0] >= 60:
+            self._requests.popleft()
+        # Bound stale identity tracking without weakening active cooldowns.
+        for mapping, age in ((self._last_request, 3600), (self._last_notice, 3600)):
+            for key, timestamp in list(mapping.items()):
+                if now - timestamp >= age:
+                    del mapping[key]
+        if now < self._backoff_until:
+            return "DeepSeek is temporarily unavailable; please try again later."
+        if user in self._active_users:
+            return "Your previous @ai request is still running."
+        if self.registryValue("throttleEnabled"):
+            wait = self.registryValue("throttleSeconds") - (
+                now - self._last_request.get(user, float("-inf")))
+            if wait > 0:
+                return "Please wait %s seconds before using @ai again." % math.ceil(wait)
+        if len(self._active_users) >= self.registryValue("maxConcurrentRequests"):
+            return "The bot is busy; please try again shortly."
+        rpm = self.registryValue("localRpmLimit")
+        if rpm and len(self._requests) >= rpm:
+            return "The bot has reached its requests-per-minute limit."
+        usage = self._users.get(user, {"attempts": 0, "tokens": 0, "successes": 0})
+        for setting, count, reason in (
+            ("dailyLimitPerUser", usage["attempts"], "You've reached your daily request limit."),
+            ("globalDailyLimit", self._attempts, "The bot has reached its daily request limit."),
+            ("dailyTokensPerUser", usage["tokens"], "You've reached your daily token limit."),
+            ("globalDailyTokens", self._tokens, "The bot has reached its daily token limit."),
+        ):
+            limit = self.registryValue(setting)
+            if limit and count >= limit:
+                return reason
+        self._users[user] = usage
+        usage["attempts"] += 1
+        self._attempts += 1
+        if not self._save_usage():
+            usage["attempts"] -= 1
+            self._attempts -= 1
+            return "Usage tracking is unavailable; please contact the bot owner."
+        self._last_request[user] = now
+        self._requests.append(now)
+        self._active_users.add(user)
+        return None
+
+    def _get_history(self, key):
+        now = time.monotonic()
+        ttl = self.registryValue("historyHours") * 3600
+        count = self.registryValue("historyExchanges")
+        for saved_key, exchanges in list(self._history.items()):
+            recent = [entry for entry in exchanges if now - entry[0] < ttl]
+            if recent and count:
+                self._history[saved_key] = recent[-count:]
+            else:
+                del self._history[saved_key]
+        return [message for _, question, answer in self._history.get(key, [])
+                for message in ({"role": "user", "content": question},
+                                {"role": "assistant", "content": answer})]
+
+    def _format_answer(self, answer):
+        # Flatten Markdown and strip control characters before IRC output.
+        answer = re.sub(r"```[^\n`]*\n?", "", answer)
+        answer = answer.replace("```", "").replace("**", "").replace("`", "")
+        answer = re.sub(r"(?m)^\s*#{1,6}\s+", "", answer)
+        answer = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", answer)
+        answer = " ".join(answer.split())
+        limit = self.registryValue("maxResponseChars")
+        if len(answer) > limit:
+            answer = answer[:limit - 1].rstrip() + "…"
+        return answer
+
+    def _api_error(self, response):
+        status = response.status_code
+        if status in (429, 500, 502, 503):
+            delay = 60.0
+            retry = response.headers.get("retry-after", "")
+            try:
+                delay = float(retry)
+            except ValueError:
+                try:
+                    delay = parsedate_to_datetime(retry).timestamp() - time.time()
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            if not math.isfinite(delay):
+                delay = 60.0
+            with self._lock:
+                self._backoff_until = max(
+                    self._backoff_until, time.monotonic() + max(1, min(delay, 3600)))
+        # Never echo provider payloads: they can contain prompts or secrets.
+        self.log.warning("DeepSeek API returned HTTP %s", status)
+        return {
+            400: "DeepSeek rejected the request format. Please contact the bot owner.",
+            401: "DeepSeek authentication failed. Please contact the bot owner.",
+            402: "DeepSeek API balance is insufficient. Please contact the bot owner.",
+            403: "DeepSeek denied access. Please contact the bot owner.",
+            422: "DeepSeek rejected the model or request settings.",
+            429: "DeepSeek rate limit reached. Please try again later.",
+        }.get(status, "DeepSeek is unavailable (HTTP %s). Please try again later." % status)
+
+    def _query(self, irc, msg, question):
+        user, key = self._keys(irc, msg)
+        if ircutils.isChannel(msg.args[0]):
+            if not self.registryValue("enabled", msg.args[0]):
+                self._notice(irc, msg, user, "DeepseekAI is disabled here. Ask the owner to use DeepseekAI enable.")
+                return
+        elif not self.registryValue("allowPrivate"):
+            self._notice(irc, msg, user, "DeepseekAI private messages are disabled.")
+            return
+        question = question.strip()
+        if not question or len(question) > self.registryValue("maxQuestionChars"):
+            self._notice(irc, msg, user, "Please provide a question of at most %s characters." % self.registryValue("maxQuestionChars"))
+            return
+        api_key = self.registryValue("apiKey").strip()
+        if not api_key:
+            self._notice(irc, msg, user, "DeepSeek API key is not set. The owner must set plugins.DeepseekAI.apiKey.")
+            return
+        with self._lock:
+            reason = self._reserve(user)
+            if reason:
+                self._notice(irc, msg, user, reason)
+                return
+            day = self._day
+        try:
+            with self._lock:
+                messages = [{"role": "system", "content": self.registryValue("systemPrompt")}]
+                messages += self._get_history(key)
+            messages.append({"role": "user", "content": question})
+            body = {
+                "model": self.registryValue("model"), "messages": messages,
+                "max_tokens": self.registryValue("maxTokens"), "stream": False,
+                "thinking": {"type": "disabled"},
+            }
+            with httpx.Client(timeout=self.registryValue("requestTimeout")) as client:
+                response = client.post(self.API_URL, json=body,
+                    headers={"Authorization": "Bearer " + api_key})
+            if response.status_code != 200:
+                self._notice(irc, msg, user, self._api_error(response))
+                return
+            data = response.json()
+            answer = data["choices"][0]["message"]["content"]
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError("Empty completion")
+            tokens = data.get("usage", {}).get("total_tokens", 0)
+            if not isinstance(tokens, int) or tokens < 0:
+                tokens = 0
+            rendered = self._format_answer(answer)
+            if not rendered:
+                raise ValueError("Empty formatted completion")
+            with self._lock:
+                self._reset_day()
+                # Completions spanning midnight belong to the reserved day.
+                if self._day == day:
+                    self._users[user]["successes"] += 1
+                    self._users[user]["tokens"] += tokens
+                    self._successes += 1
+                    self._tokens += tokens
+                    self._save_usage()
+                count = self.registryValue("historyExchanges")
+                if count:
+                    exchanges = self._history.setdefault(key, [])
+                    exchanges.append((time.monotonic(), question, rendered))
+                    del exchanges[:-count]
+            irc.reply(rendered, prefixNick=True)
+        except httpx.TimeoutException:
+            self._notice(irc, msg, user, "DeepSeek timed out. Please try again later.")
+        except httpx.HTTPError:
+            self._notice(irc, msg, user, "Could not connect to DeepSeek. Please try again later.")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            self.log.warning("DeepSeek returned an invalid completion.")
+            self._notice(irc, msg, user, "DeepSeek returned an invalid response. Please try again later.")
+        finally:
+            with self._lock:
+                self._active_users.discard(user)
+
+    @wrap(["text"])
+    def ai(self, irc, msg, args, question):
+        """<question>
+
+        Ask DeepSeek a question using your recent context in this channel.
+        """
+        self._query(irc, msg, question)
+
+    @wrap(["owner", "inChannel"])
+    def enable(self, irc, msg, args, channel):
+        """Enable DeepseekAI in this channel (owner only)."""
+        self.setRegistryValue("enabled", True, channel)
+        irc.replySuccess()
+
+    @wrap(["owner", "inChannel"])
+    def disable(self, irc, msg, args, channel):
+        """Disable DeepseekAI in this channel (owner only)."""
+        self.setRegistryValue("enabled", False, channel)
+        irc.replySuccess()
+
+    @wrap([])
+    def status(self, irc, msg, args):
+        """Show whether DeepseekAI is enabled here."""
+        enabled = (self.registryValue("enabled", msg.args[0])
+                   if ircutils.isChannel(msg.args[0]) else self.registryValue("allowPrivate"))
+        irc.reply("DeepseekAI is %s here." % ("enabled" if enabled else "disabled"))
+
+    @wrap([])
+    def forget(self, irc, msg, args):
+        """Clear your DeepSeek conversation in this channel or private chat."""
+        user, key = self._keys(irc, msg)
+        with self._lock:
+            if user in self._active_users:
+                irc.error("Wait for your current @ai request to finish before clearing history.")
+                return
+            self._history.pop(key, None)
+        irc.replySuccess()
+
+    @wrap([])
+    def aiusage(self, irc, msg, args):
+        """Show your daily DeepSeek attempts, successes, and tokens privately."""
+        user, _ = self._keys(irc, msg)
+        with self._lock:
+            self._reset_day()
+            usage = self._users.get(user, {"attempts": 0, "successes": 0, "tokens": 0})
+            text = ("You: %(attempts)s attempts, %(successes)s replies, %(tokens)s tokens. " % usage)
+            text += "Global: %s attempts, %s replies, %s tokens." % (
+                self._attempts, self._successes, self._tokens)
+        irc.reply(text, private=True)
+
+    @wrap(["owner"])
+    def resetusage(self, irc, msg, args):
+        """Reset daily DeepSeek usage counters (owner only)."""
+        with self._lock:
+            if self._active_users:
+                irc.error("Wait until all DeepSeek requests finish before resetting usage.")
+                return
+            self._users.clear()
+            self._attempts = self._tokens = self._successes = 0
+            self._day = datetime.date.today().isoformat()
+            if not self._save_usage():
+                irc.error("Could not save the reset usage counters.")
+                return
+        irc.replySuccess()
+
+
+Class = DeepseekAI

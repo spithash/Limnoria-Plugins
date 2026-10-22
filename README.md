@@ -10,3 +10,4 @@
 10. Decentralized encrypted peer-to-peer mesh network for Limnoria IRC bots --> [BotNet](https://github.com/spithash/Limnoria-Plugins/tree/main/BotNet)
 11. Query Groq's AI models from IRC. [GroqAI](https://github.com/spithash/Limnoria-Plugins/tree/main/GroqAI)
 12. Answers questions, performs calculations, and converts units with Wolfram|Alpha --> [WolframAlpha](https://github.com/spithash/Limnoria-Plugins/tree/main/WolframAlpha)
+13. Query DeepSeek AI with conversation history and flood protection --> [DeepseekAI](https://github.com/spithash/Limnoria-Plugins/tree/main/DeepseekAI)

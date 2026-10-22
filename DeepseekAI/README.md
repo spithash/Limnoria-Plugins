@@ -1,0 +1,122 @@
+# DeepseekAI
+
+Query DeepSeek from Limnoria with `@ai <question>`, recent conversation history,
+and flood protection. HTTP requests run in threads so the bot remains responsive.
+
+## Setup
+
+Requires Python 3, Limnoria, and `httpx` in the bot's Python environment. The
+package declares these dependencies in `pyproject.toml`.
+
+Load the plugin and set the private API key **in a private message to the bot**:
+
+```text
+@load DeepseekAI
+@config plugins.DeepseekAI.apiKey YOUR_DEEPSEEK_API_KEY
+```
+
+In each channel you want to use, run this as a bot owner:
+
+```text
+@DeepseekAI enable
+```
+
+GroqAI also defines `ai`. If both plugins are loaded, route the command explicitly:
+
+```text
+@defaultplugin ai DeepseekAI
+```
+
+Then ask a question:
+
+```text
+@ai Explain what an IRC bouncer does.
+```
+
+`@` is Limnoria's command prefix, configured through
+`supybot.reply.whenAddressedBy.chars`. Include `@` there if your bot uses another
+prefix. The plugin registers the `ai` command and follows normal Limnoria command
+routing; it does not intercept arbitrary channel traffic.
+
+The default model is `deepseek-flash`, with thinking disabled and at most 512
+output tokens. Change `plugins.DeepseekAI.model` to another supported DeepSeek
+chat model if needed. A DeepSeek API key and available API balance are required.
+See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-chat-completion/).
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `@ai <question>` | Ask DeepSeek with your recent context here. |
+| `@DeepseekAI forget` | Clear your context in the current channel or private chat. |
+| `@DeepseekAI aiusage` | Receive your daily usage and global totals privately. |
+| `@DeepseekAI status` | Check whether the plugin is enabled here. |
+| `@DeepseekAI enable` | Enable this channel; owner only. |
+| `@DeepseekAI disable` | Disable this channel; owner only. |
+| `@DeepseekAI resetusage` | Reset daily counters when no calls are active; owner only. |
+
+Private chat is disabled by default. Enable it with
+`@config plugins.DeepseekAI.allowPrivate True` if wanted. Channel enablement and
+private chat permission are independent.
+
+## Flood protection and usage limits
+
+All settings below are under `plugins.DeepseekAI`.
+
+| Setting | Default | Meaning |
+| --- | ---: | --- |
+| `throttleEnabled` | True | Enforce the per-user cooldown. |
+| `throttleSeconds` | 12 | Seconds between accepted attempts per user. |
+| `localRpmLimit` | 30 | API attempts across all users/networks per rolling minute. |
+| `maxConcurrentRequests` | 2 | Simultaneous API calls; excess requests are rejected. |
+| `dailyLimitPerUser` | 25 | API attempts per user per day, including failed calls. |
+| `globalDailyLimit` | 250 | API attempts across the bot per day, including failures. |
+| `dailyTokensPerUser` | 0 | Optional per-user daily token threshold. |
+| `globalDailyTokens` | 0 | Optional global daily token threshold. |
+| `maxQuestionChars` | 1000 | Maximum question length. |
+| `maxResponseChars` | 800 | Maximum answer length sent to IRC. |
+| `maxTokens` | 512 | Maximum output tokens per API call. |
+| `requestTimeout` | 45 | HTTP timeout in seconds. |
+
+Set a daily limit, token threshold, or RPM limit to `0` to disable that limit.
+The concurrency cap remains active. A user can have only one API request running
+at a time, even if their cooldown is disabled. Limit checks and reservations use
+a lock so concurrent calls cannot bypass request limits. Users are identified
+by network and `user@host`, so changing nick does not reset their allowance;
+changing host can change identity.
+
+Daily counters reset at midnight in the bot process's local timezone. They are
+saved atomically to `data/DeepseekAI/usage.json` and survive reloads/restarts.
+If an attempt cannot be saved, the plugin does not call the API. Short-term
+cooldowns, rolling RPM state, and server backoff reset on reload.
+
+Token thresholds are checked before sending a request using previously reported
+usage. An in-flight call can exceed the threshold; these are not strict monetary
+budgets. Reported token usage includes context sent again with each request.
+HTTP 429 and transient server errors pause new requests (respecting `Retry-After`
+up to one hour). Calls are never automatically retried. Rejected-request warnings
+are private notices, limited to one per user every 15 seconds.
+
+## Conversation history
+
+`historyExchanges` defaults to **20 question/reply pairs per user per channel**;
+`historyHours` defaults to **24 hours**. Context is isolated across channels,
+networks, users, and private chats. Unlike the referenced Perl bot, private chats
+do not combine channel histories. Only successful exchanges are retained, and
+stored replies use the same bounded text sent to IRC. Expired context is removed
+when a question is processed. Set `historyExchanges` to `0` to disable memory.
+
+History is held in memory and is cleared by plugin reloads or bot restarts.
+Daily usage counters are persisted separately. Your question and the included
+history are sent to DeepSeek; previous ChatGPT conversations are not involved.
+Customize the bot's personality with `plugins.DeepseekAI.systemPrompt`.
+
+## Tests
+
+Run from a temporary working directory with the bot's Python environment:
+
+```sh
+supybot-test --no-network --disable-multiprocessing /path/to/Limnoria-Plugins/DeepseekAI
+```
+
+Tests mock HTTP calls, so they need no API key or paid requests.

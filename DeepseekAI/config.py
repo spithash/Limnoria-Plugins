@@ -53,10 +53,12 @@ conf.registerGlobalValue(DeepseekAI, "throttleEnabled", registry.Boolean(
 
 class BoundedInteger(registry.Integer):
     """A registry integer with inclusive limits."""
-    def __init__(self, default, help, minimum=0, maximum=1000000000):
+    def __init__(self, default, help, minimum=0, maximum=1000000000,
+                 **kwargs):
         self.minimum = minimum
         self.maximum = maximum
-        super().__init__(default, help)
+        # Limnoria reconstructs values with setDefault=False when saving.
+        super().__init__(default, help, **kwargs)
 
     def setValue(self, value):
         if not self.minimum <= value <= self.maximum:

@@ -262,3 +262,28 @@ class DeepseekAITestCase(ChannelPluginTestCase):
             conf.supybot.plugins.DeepseekAI.maxConcurrentRequests.setValue(0)
         with self.assertRaises(registry.InvalidRegistryValue):
             conf.supybot.plugins.DeepseekAI.historyExchanges.setValue(-1)
+
+    def testRegistrySaveDefaults(self):
+        from supybot import registry
+        # Exercise the actual save path, which reconstructs each setting
+        # with setDefault=False before rendering its default-value comment.
+        with tempfile.TemporaryDirectory() as folder:
+            filename = os.path.join(folder, "deepseekai.conf")
+            with patch.object(registry, "exception") as log_exception:
+                registry.close(conf.supybot.plugins.DeepseekAI, filename)
+            log_exception.assert_not_called()
+            with open(filename, encoding="utf-8") as stream:
+                saved = stream.read()
+            self.assertIn("# Default value: 25", saved)
+            self.assertIn("# Default value: 512", saved)
+
+    def testRegistryConstructorOptions(self):
+        from .config import BoundedInteger
+        value = BoundedInteger(2, "Test setting.", 1, 10,
+                               setDefault=False, showDefault=False,
+                               private=True)
+        self.assertFalse(hasattr(value, "value"))
+        self.assertFalse(value._showDefault)
+        self.assertTrue(value._private)
+        value.setValue(3)
+        self.assertEqual(value(), 3)

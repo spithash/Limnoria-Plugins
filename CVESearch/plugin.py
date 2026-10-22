@@ -33,60 +33,106 @@ from supybot.commands import wrap
 from supybot.i18n import PluginInternationalization
 import re
 import requests
-from lxml import html
-import html as html_parser
 
 _ = PluginInternationalization('CVESearch')
 
 
 class CVESearch(callbacks.Plugin):
-    """Search and display information from NVD NIST Common Vulnerabilities and Exposures database."""
+    """Look up records from the CVE Program's official GitHub CVE List."""
 
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    CVE_PATTERN = re.compile(r'\bCVE-\d{4}-\d{4,7}\b', re.IGNORECASE)
+    threaded = True
+    USER_AGENT = "Limnoria-CVESearch"
+    CVE_PATTERN = re.compile(r'\bCVE-[0-9]{4}-[0-9]{4,}\b', re.IGNORECASE)
     URL_PATTERN = re.compile(r'https?://\S+', re.IGNORECASE)
+    RAW_BASE = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
+
+    @staticmethod
+    def _clean(value):
+        # External text must not inject IRC formatting or extra lines.
+        value = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', str(value))
+        return ' '.join(value.split())
+
+    @classmethod
+    def _english_text(cls, entries):
+        entries = [entry for entry in entries if entry.get('value')]
+        for entry in entries:
+            if entry.get('lang', '').lower().split('-')[0] == 'en':
+                return cls._clean(entry['value'])
+        return cls._clean(entries[0]['value']) if entries else ''
+
+    @classmethod
+    def _cvss(cls, cna, adp):
+        # Prefer the assigning CNA; use enrichment only if it has no CVSS.
+        for containers in ([cna], adp):
+            for key in ('cvssV4_0', 'cvssV3_1', 'cvssV3_0', 'cvssV2_0'):
+                for container in containers:
+                    for metric in container.get('metrics', []):
+                        score = metric.get(key, {})
+                        if score.get('baseScore') is not None:
+                            version = score.get('version', key[4:].replace('_', '.'))
+                            severity = score.get('baseSeverity', '')
+                            source = container.get('providerMetadata', {}).get('shortName', '')
+                            return cls._clean(
+                                f"{score['baseScore']} {severity} (v{version}"
+                                + (f", {source}" if source else '') + ")")
+        return ''
+
+    def _format_record(self, cve_id, record):
+        metadata = record['cveMetadata']
+        cna = record.get('containers', {}).get('cna', {})
+        state = metadata.get('state', 'UNKNOWN')
+        rejected = state == 'REJECTED'
+        description = self._english_text(cna.get(
+            'rejectedReasons' if rejected else 'descriptions', []))
+        description = description or ('No rejection reason provided.' if rejected
+                                      else 'No description provided.')
+        limit = self.registryValue('maxDescriptionLength')
+        if len(description) > limit:
+            description = description[:limit - 1].rstrip() + '…'
+
+        parts = [ircutils.mircColor(cve_id, 'teal')]
+        if state != 'PUBLISHED':
+            parts.append(ircutils.bold('Status:') + ' ' + self._clean(state))
+        parts.append(ircutils.bold('Reason:' if rejected else 'Description:')
+                     + ' ' + description)
+        if not rejected:
+            cvss = self._cvss(cna, record.get('containers', {}).get('adp', []))
+            if cvss:
+                parts.append(ircutils.bold('CVSS:') + ' ' + cvss)
+        for label, key in (('Published:', 'datePublished'), ('Updated:', 'dateUpdated')):
+            if metadata.get(key):
+                parts.append(ircutils.bold(label) + ' ' + self._clean(metadata[key]))
+        parts.append(ircutils.bold('URL:') + f" https://www.cve.org/CVERecord?id={cve_id}")
+        return ' - '.join(parts)
 
     def _get_cve_info(self, cve_id):
-        if not cve_id.upper().startswith('CVE-'):
+        cve_id = cve_id.strip().upper()
+        if not cve_id.startswith('CVE-'):
             cve_id = 'CVE-' + cve_id
+        if not self.CVE_PATTERN.fullmatch(cve_id):
+            return 'Error: Invalid CVE ID. Use CVE-YYYY-NNNN (at least four sequence digits).'
 
-        url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
-        headers = {'User-Agent': self.USER_AGENT}
-        response = requests.get(url, headers=headers)
-
-        if response.status_code == 200:
-            tree = html.fromstring(response.content)
-
-            # Check if the CVE does not exist
-            if tree.xpath('//h1[text()="This CVE does not exist"]'):
-                return f"Error: {cve_id} does not exist."
-
-            # Extract description information
-            description_elements = tree.xpath('//p[@data-testid="vuln-description"]')
-            description = ''.join([el.text_content().strip() for el in description_elements])
-            description = html_parser.unescape(description)  # Convert HTML entities to plain text
-
-            # Remove multiple newlines and extra whitespace
-            description = re.sub(r'\s+', ' ', description).strip()
-
-            # Extract NVD Published Date
-            published_date_elements = tree.xpath('//strong[contains(text(),"Published Date:")]/following-sibling::span[@data-testid="vuln-published-on"]//text()')
-            published_date = ' '.join(published_date_elements).strip() if published_date_elements else "N/A"
-            last_modified_elements = tree.xpath('//strong[contains(text(),"Last Modified:")]/following-sibling::span[@data-testid="vuln-last-modified-on"]//text()')
-            last_modified = ' '.join(last_modified_elements).strip() if last_modified_elements else "N/A"
-
-            # Construct the output message with formatting
-            output_lines = [
-                ircutils.mircColor(f"{cve_id}", 'teal') + " - " +
-                f"{ircutils.bold('Description:')} {description}",
-                ircutils.bold("Published Date:") + f" {published_date}",
-                ircutils.bold("Last Modified Date:") + f" {last_modified}",
-                ircutils.bold("URL:") + f" {url}"
-            ]
-            return ' - '.join(output_lines)
-        else:
-            error_message = f"Error: Unable to fetch information for {cve_id}. Status Code: {response.status_code}"
-            return ircutils.mircColor(error_message, 'red')
+        _, year, number = cve_id.split('-')
+        bucket = number[:-3] + 'xxx'
+        url = f"{self.RAW_BASE}/{year}/{bucket}/{cve_id}.json"
+        try:
+            response = requests.get(url, headers={'User-Agent': self.USER_AGENT}, timeout=15)
+            if response.status_code == 404:
+                return (f"{cve_id}: No public record found in the official CVE List. "
+                        "The ID may be reserved, unpublished, invalid, or not yet synced.")
+            if response.status_code != 200:
+                return f"Error: Unable to fetch {cve_id} from GitHub (HTTP {response.status_code})."
+            record = response.json()
+            if (not isinstance(record, dict) or record.get('dataType') != 'CVE_RECORD'
+                    or record.get('cveMetadata', {}).get('cveId') != cve_id):
+                return f"Error: Invalid CVE record received for {cve_id}."
+            return self._format_record(cve_id, record)
+        except requests.Timeout:
+            return f"Error: GitHub request timed out for {cve_id}. Try again later."
+        except requests.RequestException:
+            return f"Error: Unable to reach GitHub for {cve_id}. Try again later."
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return f"Error: Invalid CVE record received for {cve_id}."
 
     @wrap(["text"])
     def cve(self, irc, msg, args, cve_id):
@@ -116,8 +162,8 @@ class CVESearch(callbacks.Plugin):
 
         # Check if the message contains a CVE identifier pattern and is not a URL (http*)
         if not self.URL_PATTERN.search(text):
-            matches = self.CVE_PATTERN.findall(text)
-            for cve_id in matches:
+            matches = dict.fromkeys(match.upper() for match in self.CVE_PATTERN.findall(text))
+            for cve_id in list(matches)[:3]:
                 irc.reply(self._get_cve_info(cve_id))
 
 

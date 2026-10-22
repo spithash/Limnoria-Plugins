@@ -56,3 +56,6 @@ conf.registerChannelValue(CVESearch, 'cveSnarfer',
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:
+
+conf.registerGlobalValue(CVESearch, 'maxDescriptionLength',
+    registry.PositiveInteger(500, _("""Maximum description length in characters before truncation. The record link provides the full text.""")))

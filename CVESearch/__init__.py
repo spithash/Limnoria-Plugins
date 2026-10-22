@@ -29,7 +29,7 @@
 ###
 
 """
-CVESearch: Search for CVE vulnerabilities on https://cve.circl.lu
+CVESearch: Look up CVEs in the CVE Program's official GitHub CVE List.
 """
 
 import sys

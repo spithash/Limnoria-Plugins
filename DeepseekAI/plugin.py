@@ -219,7 +219,7 @@ class DeepseekAI(callbacks.Plugin):
             if bold is not None:
                 return ircutils.bold(text)
             # Invisible toggles stop following digits being parsed as a colour.
-            return ("\x0314" + text + "\x03\x02\x02" if self.registryValue("greyItalics")
+            return ("\x0393" + text + "\x03\x02\x02" if self.registryValue("greyItalics")
                     else ircutils.italic(text))
         answer = re.sub(r"`([^`]+)`|\*\*(.+?)\*\*|(?<!\w)\*([^*]+)\*(?!\w)",
                         emphasis, answer)

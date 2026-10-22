@@ -122,7 +122,8 @@ Change the allowance with `@config plugins.DeepseekAI.webDailyLimit 15`.
 ## IRC formatting
 
 Both commands support `**bold**` and `*italic*` emphasis in model replies.
-Bold becomes IRC bold; italic passages become grey by default. To use native
+Bold becomes IRC bold; italic passages become darker grey (IRC colour 93,
+`#656565`) by default. This shade requires extended IRC colour support. To use native
 italic instead, run `@config plugins.DeepseekAI.greyItalics False`. To disable
 formatting, run `@config plugins.DeepseekAI.formatting False`.
 

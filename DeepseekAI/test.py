@@ -233,7 +233,7 @@ class DeepseekAITestCase(ChannelPluginTestCase):
     def testEmphasisAndTruncatedFormatting(self):
         text = self.callback._format_answer("**Important** and *emphasis* 123")
         self.assertIn("\x02Important\x02", text)
-        self.assertIn("\x0314emphasis\x03\x02\x02 123", text)
+        self.assertIn("\x0393emphasis\x03\x02\x02 123", text)
         self.assertTrue(text.endswith("\x0f"))
         text = self.callback._format_answer("*" + "α" * 1000 + "*")
         self.assertLessEqual(len(text), 800)

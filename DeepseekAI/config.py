@@ -50,6 +50,10 @@ conf.registerGlobalValue(DeepseekAI, "allowPrivate", registry.Boolean(
     False, "Whether to allow @ai in private messages."))
 conf.registerGlobalValue(DeepseekAI, "throttleEnabled", registry.Boolean(
     True, "Whether to enforce the per-user cooldown."))
+conf.registerGlobalValue(DeepseekAI, "formatting", registry.Boolean(
+    True, "Convert Markdown bold and emphasis to IRC formatting."))
+conf.registerGlobalValue(DeepseekAI, "greyItalics", registry.Boolean(
+    True, "Render emphasis in grey; False uses native IRC italic instead."))
 
 class BoundedInteger(registry.Integer):
     """A registry integer with inclusive limits."""
@@ -69,6 +73,7 @@ class BoundedInteger(registry.Integer):
 
 # Limits prevent invalid settings from disabling protection accidentally.
 for name, default, low, high, help_text in (
+    ("webDailyLimit", 15, 0, 10000, "Shared daily @aiweb attempt limit, including failures; 0 disables web search."),
     ("throttleSeconds", 12, 0, 3600, "Seconds between a user's API attempts."),
     ("localRpmLimit", 30, 0, 1000, "Global API attempts per rolling minute; 0 disables."),
     ("maxConcurrentRequests", 2, 1, 10, "Maximum simultaneous API requests; no pending queue."),

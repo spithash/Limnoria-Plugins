@@ -53,6 +53,9 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         "plugins.DeepseekAI.dailyTokensPerUser": 0,
         "plugins.DeepseekAI.historyExchanges": 20,
         "plugins.DeepseekAI.maxQuestionChars": 1000,
+        "plugins.DeepseekAI.webDailyLimit": 15,
+        "plugins.DeepseekAI.formatting": True,
+        "plugins.DeepseekAI.greyItalics": True,
     }
 
     def setUp(self):
@@ -83,6 +86,15 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.assertEqual(kwargs["json"]["thinking"], {"type": "disabled"})
         self.assertEqual(self.callback._tokens, 42)
         self.assertEqual(self.callback._attempts, 1)
+
+    def testUsageRepliesPrivatelyAsNotice(self):
+        with patch.object(conf.supybot.reply.withNoticeWhenPrivate, "value", True):
+            response = self.assertResponse("deepseekai aiusage",
+                "You: 0 attempts, 0 replies, 0 tokens. "
+                "Global: 0 attempts, 0 replies, 0 tokens. Web: 0/15 daily attempts.")
+        self.assertEqual(response.command, "NOTICE")
+        self.assertEqual(response.args[0], self.nick)
+        self.post.assert_not_called()
 
     def testHistoryAndForget(self):
         self.assertResponse("ai first", "Hello from DeepSeek.")
@@ -215,8 +227,134 @@ class DeepseekAITestCase(ChannelPluginTestCase):
 
     def testSafeFormattingAndLength(self):
         text = self.callback._format_answer("\x01ACTION test\x01\r\n**bold** `code`\x00")
-        self.assertEqual(text, "ACTION test bold code")
+        self.assertEqual(text, "ACTION test \x02bold\x02 code\x0f")
         self.assertEqual(len(self.callback._format_answer("α" * 1000)), 800)
+
+    def testEmphasisAndTruncatedFormatting(self):
+        text = self.callback._format_answer("**Important** and *emphasis* 123")
+        self.assertIn("\x02Important\x02", text)
+        self.assertIn("\x0314emphasis\x03\x02\x02 123", text)
+        self.assertTrue(text.endswith("\x0f"))
+        text = self.callback._format_answer("*" + "α" * 1000 + "*")
+        self.assertLessEqual(len(text), 800)
+        self.assertTrue(text.endswith("…\x0f"))
+        conf.supybot.plugins.DeepseekAI.greyItalics.setValue(False)
+        self.assertEqual(self.callback._format_answer("*hello*"), "\x1dhello\x1d\x0f")
+        conf.supybot.plugins.DeepseekAI.formatting.setValue(False)
+        self.assertEqual(self.callback._format_answer("**bold** *italic* \x0304red"),
+                         "bold italic 04red")
+        self.assertEqual(self.callback._format_answer("`**literal**`"), "literal")
+
+    def testFormattedHistoryIsPlainText(self):
+        self.post.return_value = httpx.Response(200, json={
+            "choices": [{"message": {"content": "**Hello** *there*"}}]})
+        self.assertNotError("ai first")
+        self.assertNotError("ai second")
+        messages = self.post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(messages[-2]["content"], "Hello there")
+
+    def _web_responses(self):
+        return [httpx.Response(200, json={"results": [{
+            "title": "Release", "url": "https://example.org/release",
+            "summary": "Current release is 2.0."}]}),
+            httpx.Response(200, json={
+                "choices": [{"message": {"content": "Version 2.0 [1]."}}],
+                "usage": {"total_tokens": 100}})]
+
+    def testWebCommandAndPayload(self):
+        self.post.side_effect = self._web_responses()
+        self.assertResponse("aiweb latest release", "Version 2.0 [1]. [1] https://example.org/release")
+        search, chat = self.post.call_args_list
+        self.assertEqual(search.args[0], plugin.DeepseekAI.SEARCH_URL)
+        self.assertEqual(search.kwargs["json"], {
+            "query": "latest release", "count": 3, "need_content": False})
+        self.assertEqual(search.kwargs["headers"]["Authorization"], "Bearer test-secret-key")
+        self.assertEqual(chat.args[0], plugin.DeepseekAI.API_URL)
+        messages = chat.kwargs["json"]["messages"]
+        self.assertIn("untrusted", messages[0]["content"])
+        self.assertIn("Current release is 2.0.", messages[-2]["content"])
+        self.assertEqual(messages[-1]["content"], "latest release")
+        self.assertEqual(self.callback._web_attempts, 1)
+        self.assertEqual(self.callback._attempts, 1)
+        self.assertEqual(self.callback._tokens, 100)
+
+    def testWebAllowanceSharedAndRegularAiStillWorks(self):
+        for index in range(15):
+            with self.callback._lock:
+                self.assertIsNone(self.callback._reserve("web-%s" % index, web=True))
+                self.callback._active_users.clear()
+        self.assertRegexp("aiweb news", "daily web search allowance")
+        self.post.assert_not_called()
+        self.assertEqual(self.callback._web_attempts, 15)
+        self.assertResponse("ai explain something", "Hello from DeepSeek.")
+
+    def testWebAllowanceConcurrentReservation(self):
+        conf.supybot.plugins.DeepseekAI.webDailyLimit.setValue(3)
+        def reserve(index):
+            with self.callback._lock:
+                result = self.callback._reserve("web-%s" % index, web=True)
+                self.callback._active_users.clear()
+                return result
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(reserve, range(20)))
+        self.assertEqual(results.count(None), 3)
+        self.assertEqual(self.callback._web_attempts, 3)
+
+    def testWebPersistenceAndRollover(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._data_file = os.path.join(folder, "usage.json")
+            self.callback._web_attempts = 14
+            self.assertTrue(plugin.DeepseekAI._save_usage(self.callback))
+            self.callback._web_attempts = 0
+            self.callback._load_usage()
+            self.assertEqual(self.callback._web_attempts, 14)
+            self.callback._day = "2000-01-01"
+            self.callback._reset_day()
+            self.assertEqual(self.callback._web_attempts, 0)
+
+    def testWebPersistenceFailurePreventsSearch(self):
+        self.save_mock.return_value = False
+        self.assertRegexp("aiweb news", "Usage tracking is unavailable")
+        self.post.assert_not_called()
+        self.assertEqual(self.callback._web_attempts, 0)
+        self.assertEqual(self.callback._attempts, 0)
+
+    def testWebDisabledAndLengthValidation(self):
+        self.assertRegexp("aiweb " + "a" * 129, "at most 128")
+        self.post.assert_not_called()
+        self.assertEqual(self.callback._web_attempts, 0)
+        self.callback._last_notice.clear()
+        conf.supybot.plugins.DeepseekAI.webDailyLimit.setValue(0)
+        self.assertRegexp("aiweb news", "disabled")
+        self.post.assert_not_called()
+
+    def testWebEmptyResultsAndFailuresConsumeAttempt(self):
+        self.post.return_value = httpx.Response(200, json={"results": []})
+        self.assertRegexp("aiweb news", "No usable web results")
+        self.assertEqual(self.post.call_count, 1)
+        self.assertFalse(self.callback._active_users)
+        self.callback._last_notice.clear()
+        self.post.return_value = httpx.Response(429)
+        self.assertRegexp("aiweb news", "rate limit reached")
+        self.assertEqual(self.post.call_count, 2)
+        self.assertEqual(self.callback._web_attempts, 2)
+        self.assertFalse(self.callback._active_users)
+
+    def testWebMalformedResultsReleaseSlot(self):
+        self.post.return_value = httpx.Response(200, json={"results": "invalid"})
+        self.assertRegexp("aiweb news", "invalid response")
+        self.assertEqual(self.post.call_count, 1)
+        self.assertFalse(self.callback._active_users)
+
+    def testWebContextBoundedAndUnsafeUrlsExcluded(self):
+        self.post.return_value = httpx.Response(200, json={"results": [
+            {"title": "bad", "url": "javascript:alert(1)", "summary": "bad"},
+            {"title": "ok", "url": "https://example.org/", "summary": "a" * 5000}]})
+        sources, error = self.callback._search(
+            self.client.return_value.__enter__.return_value, {}, "news")
+        self.assertIsNone(error)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(len(sources[0]["summary"]), 1000)
 
     def testWarningFloodSuppression(self):
         irc = Mock()

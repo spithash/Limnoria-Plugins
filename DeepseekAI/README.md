@@ -48,6 +48,7 @@ See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-ch
 | Command | Purpose |
 | --- | --- |
 | `@ai <question>` | Ask DeepSeek with your recent context here. |
+| `@aiweb <question>` | Search the web and answer with sources; question up to 128 characters. |
 | `@DeepseekAI forget` | Clear your context in the current channel or private chat. |
 | `@DeepseekAI aiusage` | Receive your daily usage and global totals privately. |
 | `@DeepseekAI status` | Check whether the plugin is enabled here. |
@@ -77,6 +78,9 @@ All settings below are under `plugins.DeepseekAI`.
 | `maxResponseChars` | 800 | Maximum answer length sent to IRC. |
 | `maxTokens` | 512 | Maximum output tokens per API call. |
 | `requestTimeout` | 45 | HTTP timeout in seconds. |
+| `webDailyLimit` | 15 | Shared daily web attempts across all users, channels, and networks; 0 disables web search. |
+| `formatting` | True | Convert Markdown emphasis to IRC formatting. |
+| `greyItalics` | True | Render italic passages in grey; False uses native IRC italic. |
 
 Set a daily limit, token threshold, or RPM limit to `0` to disable that limit.
 The concurrency cap remains active. A user can have only one API request running
@@ -89,6 +93,44 @@ Daily counters reset at midnight in the bot process's local timezone. They are
 saved atomically to `data/DeepseekAI/usage.json` and survive reloads/restarts.
 If an attempt cannot be saved, the plugin does not call the API. Short-term
 cooldowns, rolling RPM state, and server backoff reset on reload.
+
+## Web search
+
+`@aiweb latest Limnoria release` searches DeepSeek's web index using the same API
+key, then sends up to three bounded result summaries to the chat model. Replies
+include source links that fit within the response length limit. Retrieved text
+is treated as untrusted reference material. Search improves freshness, but the
+answer still needs to be checked against its sources.
+
+The default allowance is **15 web attempts per day for the entire bot**. It is
+saved with usage counters, survives reloads and restarts, and resets at midnight
+in the bot's local timezone. Failed searches and failed subsequent completions
+also consume an attempt. Web questions also count toward existing request and
+token limits and share cooldowns and concurrency slots with `@ai`. No automatic
+retries or full-page fetches are performed. `@DeepseekAI aiusage` shows the shared
+web counter; the owner command `resetusage` also resets this counter.
+
+At the published price of $0.75 per 1,000 successful searches, 15 searches daily
+cost at most about $0.34 in search fees over 30 days, plus normal model input and
+output charges. Search summaries add input tokens. See the
+[Search & Fetch guide](https://api-docs.deepseek.com/guides/search/) for current
+pricing. Ordinary `@ai` never searches and remains available when the web
+allowance is exhausted, subject to the existing shared limits.
+
+Change the allowance with `@config plugins.DeepseekAI.webDailyLimit 15`.
+
+## IRC formatting
+
+Both commands support `**bold**` and `*italic*` emphasis in model replies.
+Bold becomes IRC bold; italic passages become grey by default. To use native
+italic instead, run `@config plugins.DeepseekAI.greyItalics False`. To disable
+formatting, run `@config plugins.DeepseekAI.formatting False`.
+
+Rendering depends on the IRC client and theme, and channels that strip colours
+or formatting may remove it. The plugin strips incoming control characters and
+generates its own formatting codes, resets formatting at the end of each answer,
+and stores plain text in conversation history. Formatting instructions are added
+to requests automatically, including when you have customized `systemPrompt`.
 
 Token thresholds are checked before sending a request using previously reported
 usage. An in-flight call can exceed the threshold; these are not strict monetary

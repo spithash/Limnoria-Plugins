@@ -122,20 +122,20 @@ class DeepseekAITestCase(ChannelPluginTestCase):
     def testNickPromptNeedsOptInAndIgnoresOtherTraffic(self):
         msg = ircmsgs.privmsg(self.channel, self.irc.nick + ": explain IRC",
                               prefix=self.prefix)
-        proxy = Mock(wraps=self.irc)
-        proxy.network = self.irc.network
-        with patch.object(self.callback, "_query") as query:
-            self.callback.invalidCommand(proxy, msg, ["explain", "IRC"])
-            query.assert_not_called()
-            self._enable_nick_prompts()
-            for text in ("explain IRC", "@unknowncommand IRC",
-                         self.irc.nick + "Else: explain IRC"):
-                other = ircmsgs.privmsg(self.channel, text, prefix=self.prefix)
-                self.callback.invalidCommand(self.irc, other, [])
-            query.assert_not_called()
-            self.callback.setRegistryValue("enabled", False, self.channel)
-            self.callback.invalidCommand(proxy, msg, [])
-            query.assert_not_called()
+        msg.channel = self.channel
+        self.assertIs(self.callback.inFilter(self.irc, msg), msg)
+        self.assertIsNone(msg.tagged("deepseekai.question"))
+        self._enable_nick_prompts()
+        for text in ("explain IRC", "@unknowncommand IRC",
+                     self.irc.nick + "Else: explain IRC"):
+            other = ircmsgs.privmsg(self.channel, text, prefix=self.prefix)
+            other.channel = self.channel
+            self.callback.inFilter(self.irc, other)
+            self.assertIsNone(other.tagged("deepseekai.question"))
+        self.callback.setRegistryValue("enabled", False, self.channel)
+        self.callback.inFilter(self.irc, msg)
+        self.assertIsNone(msg.tagged("deepseekai.question"))
+        self.post.assert_not_called()
 
     def testNickPromptRejectionIsHandled(self):
         self._enable_nick_prompts()
@@ -164,21 +164,95 @@ class DeepseekAITestCase(ChannelPluginTestCase):
                 value.setValue(enabled)
         msg = ircmsgs.privmsg(self.channel, self.irc.nick + ": explain IRC",
                               prefix=self.prefix)
-        msg.tag("channel", self.channel)
-        proxy = Mock(network="grnet", nick=self.irc.nick)
+        msg.channel = self.channel
+        proxy = Mock(network="grnet", nick=self.irc.nick, callbacks=self.irc.callbacks)
         # Registry lookup validates networks against live IRC connections.
-        with patch("supybot.world.getIrc", return_value=proxy), \
-                patch.object(self.callback, "_query") as query:
-            self.callback.invalidCommand(proxy, msg, [])
-            query.assert_not_called()
+        with patch("supybot.world.getIrc", return_value=proxy):
+            self.callback.inFilter(proxy, msg)
+            self.assertIsNone(msg.tagged("deepseekai.question"))
             proxy.network = "dalnet"
-            self.callback.invalidCommand(proxy, msg, [])
-            query.assert_called_once_with(proxy, msg, "explain IRC")
+            self.callback.inFilter(proxy, msg)
+            self.assertEqual(msg.tagged("deepseekai.question"), "explain IRC")
         proxy.network = "grnet"
         with patch("supybot.world.getIrc", return_value=proxy):
             self.callback._query(proxy, msg, "explain IRC")
         self.post.assert_not_called()
         self.assertIn("disabled", proxy.queueMsg.call_args.args[0].args[1])
+
+    def testNickPromptsTreatSyntaxAsLiteralText(self):
+        self._enable_nick_prompts()
+        for question in ('explain [deepseekai forget]', 'explain [unfinished',
+                         'explain "unfinished', 'explain x | deepseekai forget',
+                         'explain arr[0] and \\n literally', 'εξήγησε [α]',
+                         '[deepseekai forget] explain this'):
+            with self.subTest(question=question):
+                self.assertResponse(self.irc.nick + ": " + question,
+                                    "Hello from DeepSeek.", usePrefixChar=False)
+                self.assertEqual(self.post.call_args.kwargs["json"]["messages"][-1],
+                                 {"role": "user", "content": question})
+        self.assertEqual(self.post.call_count, 7)
+        self.assertEqual(len(next(iter(self.callback._history.values()))), 7)
+
+    def testKnownCommandSyntaxAndPermissionsStayCommands(self):
+        self._enable_nick_prompts()
+        self.assertError(self.irc.nick + ': deepseekai forget [unfinished',
+                         usePrefixChar=False)
+        with patch("supybot.ircdb.checkCapability", return_value=False):
+            self.assertError(self.irc.nick + ': deepseekai enable', usePrefixChar=False)
+        self.post.assert_not_called()
+
+    def testNickPromptsRespectIgnoresAndNickAddressing(self):
+        self._enable_nick_prompts()
+        with patch("supybot.ircdb.checkIgnored", return_value=True):
+            self.assertNoResponse(self.irc.nick + ': explain [anything]',
+                                  usePrefixChar=False, timeout=0.2)
+        conf.supybot.reply.whenAddressedBy.nick.setValue(False)
+        self.assertNoResponse(self.irc.nick + ': explain anything',
+                              usePrefixChar=False, timeout=0.2)
+        self.post.assert_not_called()
+
+    def testNickReplyOwnerCommandAndStatus(self):
+        value = conf.supybot.plugins.DeepseekAI.replyToNick.get(
+            ":" + self.irc.network).get(self.channel)
+        self.originals.setdefault(value, value())
+        with patch("supybot.ircdb.checkCapability", return_value=False):
+            self.assertError("deepseekai nickreply on")
+        original = ircdb.checkCapability
+        def check(prefix, capability, *args, **kwargs):
+            return capability == "owner" or original(prefix, capability, *args, **kwargs)
+        with patch("supybot.ircdb.checkCapability", side_effect=check):
+            self.assertNotError("deepseekai nickreply on")
+            self.assertTrue(value())
+            self.assertFalse(self.callback.registryValue("replyToNick", self.channel))
+            self.assertRegexp("deepseekai status",
+                              self.irc.network + ".*" + self.channel + ".*nick replies enabled")
+            self.assertNotError("deepseekai nickreply off")
+            self.assertFalse(value())
+            self.assertError("deepseekai nickreply maybe")
+        self.post.assert_not_called()
+
+    def testSystemPromptDefaultsAndNetworkChannelOverrides(self):
+        default = conf.supybot.plugins.DeepseekAI.systemPrompt()
+        self.assertResponse("ai default", "Hello from DeepSeek.")
+        self.assertTrue(self.post.call_args.kwargs["json"]["messages"][0]["content"].startswith(default))
+        value = conf.supybot.plugins.DeepseekAI.systemPrompt.get(
+            ":" + self.irc.network).get(self.channel)
+        self.originals.setdefault(value, value())
+        value.setValue("Answer only in English, with dry irony.")
+        self.assertResponse("ai custom", "Hello from DeepSeek.")
+        self.assertTrue(self.post.call_args.kwargs["json"]["messages"][0]["content"].startswith(value()))
+        self.assertEqual(conf.supybot.plugins.DeepseekAI.systemPrompt(), default)
+        self.assertEqual(self.callback.registryValue("systemPrompt", "#another",
+                         network=self.irc.network), default)
+        with patch("supybot.world.getIrc", return_value=self.irc):
+            self.assertEqual(self.callback.registryValue("systemPrompt", self.channel,
+                             network="anothernetwork"), default)
+        with tempfile.TemporaryDirectory() as folder:
+            from supybot import registry
+            filename = os.path.join(folder, "settings.conf")
+            registry.close(conf.supybot.plugins.DeepseekAI, filename)
+            with open(filename, encoding="utf-8") as stream:
+                self.assertIn("Answer only in English, with dry irony.", stream.read())
 
     def testUsageRepliesPrivatelyAsNotice(self):
         with patch.object(conf.supybot.reply.withNoticeWhenPrivate, "value", True):
@@ -524,3 +598,59 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.assertTrue(value._private)
         value.setValue(3)
         self.assertEqual(value(), 3)
+
+    def testUpgradeGlobalPromptOnReloadPreservesConfiguration(self):
+        from importlib import reload
+        from . import config
+        value = conf.supybot.plugins.DeepseekAI.systemPrompt
+        self.originals.setdefault(value, value())
+        value.setValue("An existing customized global prompt.")
+        value._supplyDefault = False
+        value._networkValue = False
+        value._channelValue = False
+        reload(config)
+        self.assertIs(conf.supybot.plugins.DeepseekAI.systemPrompt, value)
+        self.assertEqual(value(), "An existing customized global prompt.")
+        self.assertTrue(value._supplyDefault)
+        self.assertTrue(value._networkValue)
+        self.assertTrue(value._channelValue)
+
+
+class DeepseekAIConfigTestCase(ChannelPluginTestCase):
+    plugins = ("DeepseekAI", "Config", "Utilities", "Aka")
+    config = {
+        "plugins.DeepseekAI.enabled": True,
+        "plugins.DeepseekAI.replyToNick": True,
+        "reply.whenAddressedBy.nick": True,
+    }
+
+    def testConfigurePersonalityWithoutAffectingOtherChannelsOrNetworks(self):
+        callback = self.irc.getCallback("DeepseekAI")
+        default = callback.registryValue("systemPrompt")
+        self.assertNotError("deepseekai status")
+        value = conf.supybot.plugins.DeepseekAI.systemPrompt.get(
+            ":" + self.irc.network).get(self.channel)
+        self.originals.setdefault(value, value())
+        original = ircdb.checkCapability
+        def check(prefix, capability, *args, **kwargs):
+            return capability == "owner" or original(prefix, capability, *args, **kwargs)
+        name = "plugins.DeepseekAI.systemPrompt.:%s.%s" % (self.irc.network, self.channel)
+        with patch("supybot.ircdb.checkCapability", side_effect=check):
+            self.assertNotError("config " + name + " Always answer in English with dry irony.")
+            self.assertResponse("config " + name, "Always answer in English with dry irony.")
+        self.assertEqual(value(), "Always answer in English with dry irony.")
+        self.assertEqual(callback.registryValue("systemPrompt", self.channel), default)
+        self.assertEqual(callback.registryValue("systemPrompt", "#elsewhere",
+                         network=self.irc.network), default)
+        self.assertRegexp("deepseekai status", "personality custom")
+
+    def testKnownCommandsAndAliasesRetainNormalParsing(self):
+        self.assertResponse(self.irc.nick + ': echo [echo nested]', "nested",
+                            usePrefixChar=False)
+        self.assertResponse(self.irc.nick + ': echo[echo nested]', "nested",
+                            usePrefixChar=False)
+        self.assertError(self.irc.nick + ': echo[unfinished', usePrefixChar=False)
+        self.assertNotError('aka add testgreeting "echo Hello there"')
+        self.assertResponse(self.irc.nick + ': testgreeting', "Hello there",
+                            usePrefixChar=False)
+        self.assertNotError("aka remove testgreeting")

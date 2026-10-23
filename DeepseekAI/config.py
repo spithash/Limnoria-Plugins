@@ -40,10 +40,23 @@ conf.registerGlobalValue(DeepseekAI, "apiKey", registry.String(
     "", "DeepSeek API key from https://platform.deepseek.com/api_keys.", private=True))
 conf.registerGlobalValue(DeepseekAI, "model", registry.String(
     "deepseek-flash", "DeepSeek chat model identifier."))
-conf.registerGlobalValue(DeepseekAI, "systemPrompt", registry.String(
+# Limnoria keeps existing registry objects on plugin reload. Upgrade the old
+# global setting in place so reloads preserve its configured text and gain
+# channel/network support without requiring a bot restart.
+try:
+    _existing_prompt = DeepseekAI.get("systemPrompt")
+except registry.NonExistentRegistryEntry:
+    pass
+else:
+    _existing_prompt._supplyDefault = True
+    _existing_prompt._networkValue = True
+    _existing_prompt._channelValue = True
+    _existing_prompt._opSettable = True
+conf.registerChannelValue(DeepseekAI, "systemPrompt", registry.String(
     "You are a helpful IRC assistant. Reply in the user's language, including Greek or English. "
     "Be concise and use plain text without Markdown tables or headings.",
-    "Instructions sent with each question."))
+    "Instructions sent with each question. The global value is the default; "
+    "network/channel overrides can customize tone, language, and personality."))
 conf.registerChannelValue(DeepseekAI, "enabled", registry.Boolean(
     False, "Whether @ai is enabled in this channel. Use DeepseekAI enable as owner."))
 conf.registerChannelValue(DeepseekAI, "replyToNick", registry.Boolean(

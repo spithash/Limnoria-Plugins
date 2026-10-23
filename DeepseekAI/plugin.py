@@ -323,7 +323,8 @@ class DeepseekAI(callbacks.Plugin):
             day = self._day
         try:
             with self._lock:
-                messages = [{"role": "system", "content": self.registryValue("systemPrompt")}]
+                messages = [{"role": "system", "content": self.registryValue(
+                    "systemPrompt", msg.channel, network=irc.network)}]
                 if self.registryValue("formatting"):
                     messages[0]["content"] += " Use **bold** for key phrases and *italic* for occasional emphasis."
                 messages += self._get_history(key)
@@ -397,22 +398,64 @@ class DeepseekAI(callbacks.Plugin):
             with self._lock:
                 self._active_users.discard(user)
 
-    def invalidCommand(self, irc, msg, tokens):
-        # Let Limnoria dispatch known commands first. Only channel messages
-        # explicitly addressed to our current nick can become implicit prompts.
+    def inFilter(self, irc, msg):
+        # Classify nick prompts before Owner tokenizes the message. Only tag
+        # the command payload: channel logs and other plugins see original text.
+        if msg.command != "PRIVMSG" or ircmsgs.isCtcp(msg):
+            return msg
         channel = msg.channel
         if (not channel or not self.registryValue("enabled", channel, network=irc.network)
-                or not self.registryValue("replyToNick", channel, network=irc.network)):
-            return
+                or not self.registryValue("replyToNick", channel, network=irc.network)
+                or not conf.get(conf.supybot.reply.whenAddressedBy.nick,
+                                channel=channel, network=irc.network)):
+            return msg
         question = callbacks._addressed(
             irc, msg, prefixChars="", prefixStrings=(), nicks=(),
             whenAddressedByNick=True, whenAddressedByNickAtEnd=False)
         if not question or question == msg.args[1]:
-            return
-        # Suppress other invalid-command handlers even when a limit rejects
-        # the request or the API fails. Reuse all normal AI protections.
-        irc.noReply()
-        self._query(irc, msg, question)
+            return msg
+        # Tokenization alone does not execute anything. Inspect only the leading
+        # words, so brackets in an unknown prompt never run as nested commands.
+        try:
+            tokens = callbacks.tokenize(question, channel=channel, network=irc.network)
+            words = []
+            for token in tokens:
+                if not isinstance(token, str):
+                    break
+                words.append(token)
+        except SyntaxError:
+            # A known command with malformed arguments must keep its normal
+            # syntax error. Recover its name without requiring balanced syntax.
+            quotes = conf.get(conf.supybot.commands.quotes,
+                              channel=channel, network=irc.network)
+            try:
+                words = callbacks.Tokenizer(quotes=quotes).tokenize(question)
+            except (SyntaxError, ValueError):
+                words = question.split()
+            if words and conf.supybot.commands.nested():
+                separators = conf.get(conf.supybot.commands.nested.brackets,
+                                      channel=channel, network=irc.network)
+                if conf.get(conf.supybot.commands.nested.pipeSyntax,
+                            channel=channel, network=irc.network):
+                    separators += "|"
+                for separator in separators:
+                    words[0] = words[0].split(separator, 1)[0]
+        words = [callbacks.canonicalName(word) for word in words]
+        # A prompt beginning with bracketed text still has no command name.
+        if not words:
+            words = [""]
+        for cb in irc.callbacks:
+            if not hasattr(cb, "getCommand"):
+                continue
+            if (words[0] == cb.canonicalName() or cb.getCommand(words)
+                    or cb.isDisabled(words[0])):
+                return msg
+        # Let normal dispatch enforce ignores, capabilities, flood protection,
+        # history-batch exclusion, and threading. The original prompt bypasses
+        # command evaluation and is passed unchanged to the AI command.
+        msg.tag("deepseekai.question", question)
+        msg.tag("addressed", "DeepseekAI ai _")
+        return msg
 
     @wrap(["text"])
     def ai(self, irc, msg, args, question):
@@ -420,7 +463,7 @@ class DeepseekAI(callbacks.Plugin):
 
         Ask DeepSeek a question using your recent context in this channel.
         """
-        self._query(irc, msg, question)
+        self._query(irc, msg, msg.tagged("deepseekai.question") or question)
 
     @wrap(["text"])
     def aiweb(self, irc, msg, args, question):
@@ -442,12 +485,33 @@ class DeepseekAI(callbacks.Plugin):
         self.setRegistryValue("enabled", False, channel, network=irc.network)
         irc.replySuccess()
 
+    @wrap(["owner", "inChannel", "boolean"])
+    def nickreply(self, irc, msg, args, channel, enabled):
+        """<on|off>
+
+        Enable or disable nick prompts in this network/channel (owner only).
+        AI channel enablement and Limnoria nick addressing are separate settings.
+        """
+        self.setRegistryValue("replyToNick", enabled, channel, network=irc.network)
+        irc.replySuccess()
+
     @wrap([])
     def status(self, irc, msg, args):
-        """Show whether DeepseekAI is enabled here."""
-        enabled = (self.registryValue("enabled", msg.args[0], network=irc.network)
-                   if ircutils.isChannel(msg.args[0]) else self.registryValue("allowPrivate"))
-        irc.reply("DeepseekAI is %s here." % ("enabled" if enabled else "disabled"))
+        """Show AI, nick-reply, and nick-addressing settings for this location."""
+        if msg.channel:
+            enabled = self.registryValue("enabled", msg.channel, network=irc.network)
+            nickreply = self.registryValue("replyToNick", msg.channel, network=irc.network)
+            addressing = conf.get(conf.supybot.reply.whenAddressedBy.nick,
+                                  channel=msg.channel, network=irc.network)
+            prompt = self.registryValue("systemPrompt", msg.channel, network=irc.network)
+            irc.reply("DeepseekAI on %s %s: AI %s; nick replies %s; nick addressing %s; personality %s." % (
+                irc.network, msg.channel, "enabled" if enabled else "disabled",
+                "enabled" if nickreply else "disabled",
+                "enabled" if addressing else "disabled",
+                "default" if prompt == self.registryValue("systemPrompt") else "custom"))
+        else:
+            irc.reply("DeepseekAI on %s: private AI %s." % (
+                irc.network, "enabled" if self.registryValue("allowPrivate") else "disabled"))
 
     @wrap([])
     def forget(self, irc, msg, args):

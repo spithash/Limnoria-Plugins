@@ -40,20 +40,24 @@ routing; it does not intercept arbitrary channel traffic.
 
 ## Questions addressed to the bot's nick
 
-Enable nick addressing so normal commands such as `R2-D2: help` work. Then
-enable AI fallback only in the channels where you want it. For example, send
-these commands privately to the bot (using your configured `@` prefix):
+As owner, enable nick addressing so normal commands such as `R2-D2: help`
+work. You can send this privately to the bot (using your configured prefix):
 
 ```text
 @config reply.whenAddressedBy.nick True
-@config channel <network> <channel> plugins.DeepseekAI.enabled True
-@config channel <network> <channel> plugins.DeepseekAI.replyToNick True
+```
+
+Then run these in each desired channel, on the desired network:
+
+```text
+@DeepseekAI enable
+@DeepseekAI nickreply on
+@DeepseekAI status
 ```
 
 Now `R2-D2: explain IRC bouncers` asks DeepSeek, while `R2-D2: help` runs the
 normal command. `R2-D2 ai explain IRC bouncers` still works too. Use your bot's
-current nick. Replace `<network>` with the configured network name and
-`<channel>` with the channel name, including its `#` prefix.
+current nick.
 Recognized commands take priority, including their syntax and
 permission errors; use explicit `ai` if a question starts with a command name.
 
@@ -61,7 +65,7 @@ An empty `reply.whenAddressedBy.chars` disables character prefixes in that
 channel; nick addressing is controlled separately. Keep it empty in any
 channel where you want nick-only addressing. Other channels can keep
 `@`. Plain channel conversation and unknown `@commands` do not trigger AI.
-The fallback is off by default and requires both channel settings above.
+The fallback is off by default and requires both `enabled` and `replyToNick`.
 It shares `ai` history, cooldowns, usage limits, and API settings.
 
 Both `enabled` and `replyToNick` are read for the current network and channel.
@@ -73,9 +77,47 @@ channel-only compatibility value; reset it with, for example,
 `config plugins.DeepseekAI.enabled.<channel> False` after enabling a specific
 network. Apply the same cleanup to `replyToNick` for strict network isolation.
 
-Fallback text passes through Limnoria's command parser first, so its quoting
-and nested-command rules still apply. Use `ai` for explicit prompts and adjust
-`commands.nested` if you do not want bracketed text evaluated as commands.
+Nick-addressed text that does not start with a recognized command is sent as
+literal prompt text: quotes, square brackets, backslashes, and pipes are
+preserved, including unmatched quotes or brackets. Text inside brackets is
+not executed as a nested command. Recognized commands (including explicit
+`ai` and `aiweb`) still follow Limnoria's normal parsing rules.
+
+`nickreply` changes only the current network/channel's `replyToNick` setting.
+Use `@DeepseekAI nickreply off` to turn nick prompts off. This command does not
+enable AI or change Limnoria's nick-addressing setting. `status`
+shows the network, channel, AI enablement, nick replies, nick addressing, and
+whether the effective personality differs from the global default.
+
+## Personalities
+
+`plugins.DeepseekAI.systemPrompt` contains the instructions sent with each
+question. Its global value remains the default for channels without an
+override. The built-in default in `config.py` is unchanged: concise, helpful
+answers in the user's language, including Greek or English.
+
+To customize just one network/channel, first run `@DeepseekAI status` in that
+channel. This registers its configuration entries. Then, as owner, set the
+fully qualified entry, replacing both placeholders:
+
+```text
+@config plugins.DeepseekAI.systemPrompt.:<network>.<channel> Be a helpful technical assistant. Answer only in English, concisely and with dry wit.
+@flush
+```
+
+Use a channel name including its `#` prefix. This direct setting changes only
+that network/channel pair. It avoids the channel-only compatibility entry
+written by `config channel`. Set `plugins.DeepseekAI.systemPrompt` without the
+suffix to edit the global default instead. Unconfigured channels inherit it.
+
+Limnoria saves the global prompt and explicit overrides in the bot's `.conf`
+file when it saves configuration, including on `@flush`. They survive reloads
+and restarts. No channel name or custom personality is hardcoded in the plugin.
+For long prompts that exceed your IRC server's message limit, run `@flush`,
+edit the corresponding `.conf` entry, then use `@config reload` to read it back.
+The same personality applies to `ai`, nick prompts, and `aiweb`; formatting and
+web-source instructions are appended as needed. Existing conversation history
+is retained when a prompt changes; use `@DeepseekAI forget` for a fresh start.
 
 The default model is `deepseek-flash`, with thinking disabled and at most 512
 output tokens. Change `plugins.DeepseekAI.model` to another supported DeepSeek
@@ -91,6 +133,7 @@ See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-ch
 | `@DeepseekAI forget` | Clear your context in the current channel or private chat. |
 | `@DeepseekAI aiusage` | Receive your daily usage and global totals privately. |
 | `@DeepseekAI status` | Check whether the plugin is enabled here. |
+| `@DeepseekAI nickreply on\|off` | Toggle nick prompts for this network/channel; owner only. |
 | `@DeepseekAI enable` | Enable this channel; owner only. |
 | `@DeepseekAI disable` | Disable this channel; owner only. |
 | `@DeepseekAI resetusage` | Reset daily counters when no calls are active; owner only. |

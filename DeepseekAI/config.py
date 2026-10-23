@@ -46,6 +46,9 @@ conf.registerGlobalValue(DeepseekAI, "systemPrompt", registry.String(
     "Instructions sent with each question."))
 conf.registerChannelValue(DeepseekAI, "enabled", registry.Boolean(
     False, "Whether @ai is enabled in this channel. Use DeepseekAI enable as owner."))
+conf.registerChannelValue(DeepseekAI, "replyToNick", registry.Boolean(
+    False, "Treat nick-addressed text that is not a known command as an AI question. "
+    "Requires reply.whenAddressedBy.nick and DeepseekAI.enabled in this channel."))
 conf.registerGlobalValue(DeepseekAI, "allowPrivate", registry.Boolean(
     False, "Whether to allow @ai in private messages."))
 conf.registerGlobalValue(DeepseekAI, "throttleEnabled", registry.Boolean(

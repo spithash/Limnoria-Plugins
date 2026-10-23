@@ -298,7 +298,7 @@ class DeepseekAI(callbacks.Plugin):
     def _query(self, irc, msg, question, web=False):
         user, key = self._keys(irc, msg)
         if ircutils.isChannel(msg.args[0]):
-            if not self.registryValue("enabled", msg.args[0]):
+            if not self.registryValue("enabled", msg.args[0], network=irc.network):
                 self._notice(irc, msg, user, "DeepseekAI is disabled here. Ask the owner to use DeepseekAI enable.")
                 return
         elif not self.registryValue("allowPrivate"):
@@ -397,6 +397,23 @@ class DeepseekAI(callbacks.Plugin):
             with self._lock:
                 self._active_users.discard(user)
 
+    def invalidCommand(self, irc, msg, tokens):
+        # Let Limnoria dispatch known commands first. Only channel messages
+        # explicitly addressed to our current nick can become implicit prompts.
+        channel = msg.channel
+        if (not channel or not self.registryValue("enabled", channel, network=irc.network)
+                or not self.registryValue("replyToNick", channel, network=irc.network)):
+            return
+        question = callbacks._addressed(
+            irc, msg, prefixChars="", prefixStrings=(), nicks=(),
+            whenAddressedByNick=True, whenAddressedByNickAtEnd=False)
+        if not question or question == msg.args[1]:
+            return
+        # Suppress other invalid-command handlers even when a limit rejects
+        # the request or the API fails. Reuse all normal AI protections.
+        irc.noReply()
+        self._query(irc, msg, question)
+
     @wrap(["text"])
     def ai(self, irc, msg, args, question):
         """<question>
@@ -416,19 +433,19 @@ class DeepseekAI(callbacks.Plugin):
     @wrap(["owner", "inChannel"])
     def enable(self, irc, msg, args, channel):
         """Enable DeepseekAI in this channel (owner only)."""
-        self.setRegistryValue("enabled", True, channel)
+        self.setRegistryValue("enabled", True, channel, network=irc.network)
         irc.replySuccess()
 
     @wrap(["owner", "inChannel"])
     def disable(self, irc, msg, args, channel):
         """Disable DeepseekAI in this channel (owner only)."""
-        self.setRegistryValue("enabled", False, channel)
+        self.setRegistryValue("enabled", False, channel, network=irc.network)
         irc.replySuccess()
 
     @wrap([])
     def status(self, irc, msg, args):
         """Show whether DeepseekAI is enabled here."""
-        enabled = (self.registryValue("enabled", msg.args[0])
+        enabled = (self.registryValue("enabled", msg.args[0], network=irc.network)
                    if ircutils.isChannel(msg.args[0]) else self.registryValue("allowPrivate"))
         irc.reply("DeepseekAI is %s here." % ("enabled" if enabled else "disabled"))
 

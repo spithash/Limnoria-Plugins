@@ -38,6 +38,44 @@ Then ask a question:
 prefix. The plugin registers the `ai` command and follows normal Limnoria command
 routing; it does not intercept arbitrary channel traffic.
 
+## Questions addressed to the bot's nick
+
+Enable nick addressing so normal commands such as `R2-D2: help` work. Then
+enable AI fallback only in the channels where you want it. For example, send
+these commands privately to the bot (using your configured `@` prefix):
+
+```text
+@config reply.whenAddressedBy.nick True
+@config channel <network> #limnoria-bots plugins.DeepseekAI.enabled True
+@config channel <network> #limnoria-bots plugins.DeepseekAI.replyToNick True
+```
+
+Now `R2-D2: explain IRC bouncers` asks DeepSeek, while `R2-D2: help` runs the
+normal command. `R2-D2 ai explain IRC bouncers` still works too. Use your bot's
+current nick. Replace `<network>` with the configured network name, such as
+`dalnet`, `grnet`, or `libera`. Recognized commands take priority, including their syntax and
+permission errors; use explicit `ai` if a question starts with a command name.
+
+An empty `reply.whenAddressedBy.chars` disables character prefixes in that
+channel; nick addressing is controlled separately. Keep it empty in
+`#limnoria-bots` if you want nick-only addressing there. Other channels can keep
+`@`. Plain channel conversation and unknown `@commands` do not trigger AI.
+The fallback is off by default and requires both channel settings above.
+It shares `ai` history, cooldowns, usage limits, and API settings.
+
+Both `enabled` and `replyToNick` are read for the current network and channel.
+The owner commands `DeepseekAI enable` and `DeepseekAI disable` change only
+that network/channel pair; `status` checks the same scope. Limnoria can fall
+back to older channel-only entries, so set those to False when migrating to
+network-specific enablement. Its `config channel` command also writes a
+channel-only compatibility value; reset it with, for example,
+`config plugins.DeepseekAI.enabled.#codex False` after enabling a specific
+network. Apply the same cleanup to `replyToNick` for strict network isolation.
+
+Fallback text passes through Limnoria's command parser first, so its quoting
+and nested-command rules still apply. Use `ai` for explicit prompts and adjust
+`commands.nested` if you do not want bracketed text evaluated as commands.
+
 The default model is `deepseek-flash`, with thinking disabled and at most 512
 output tokens. Change `plugins.DeepseekAI.model` to another supported DeepSeek
 chat model if needed. A DeepSeek API key and available API balance are required.

@@ -40,7 +40,7 @@ routing; it does not intercept arbitrary channel traffic.
 
 ## Questions addressed to the bot's nick
 
-As owner, enable nick addressing so normal commands such as `R2-D2: help`
+As owner, enable nick addressing so normal commands such as `botnick: help`
 work. You can send this privately to the bot (using your configured prefix):
 
 ```text
@@ -55,8 +55,8 @@ Then run these in each desired channel, on the desired network:
 @DeepseekAI status
 ```
 
-Now `R2-D2: explain IRC bouncers` asks DeepSeek, while `R2-D2: help` runs the
-normal command. `R2-D2 ai explain IRC bouncers` still works too. Use your bot's
+Now `botnick: explain IRC bouncers` asks DeepSeek, while `botnick: help` runs the
+normal command. `botnick ai explain IRC bouncers` still works too. Use your bot's
 current nick.
 Recognized commands take priority, including their syntax and
 permission errors; use explicit `ai` if a question starts with a command name.

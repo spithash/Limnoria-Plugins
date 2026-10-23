@@ -96,9 +96,44 @@ question. Its global value remains the default for channels without an
 override. The built-in default in `config.py` is unchanged: concise, helpful
 answers in the user's language, including Greek or English.
 
-To customize just one network/channel, first run `@DeepseekAI status` in that
-channel. This registers its configuration entries. Then, as owner, set the
-fully qualified entry, replacing both placeholders:
+To customize just the current network/channel, run this as owner in that channel:
+
+```text
+@DeepseekAI prompt Be a helpful technical assistant. Answer only in English, concisely and with dry wit.
+@flush
+```
+
+`@DeepseekAI prompt` without instructions shows the effective prompt privately.
+Use `@DeepseekAI prompt <channel>` to view another channel's prompt on the same
+network, including from a private message. You can also set it remotely with
+`@DeepseekAI prompt <channel> <instructions>`. The bot must be in that channel.
+To manage a channel on another network, send the command to the bot there.
+The command writes the existing `systemPrompt` setting only for the current
+network and selected channel; it does not change the global or channel-only defaults.
+Instructions follow normal Limnoria command quoting and nesting rules.
+
+For prompts longer than one IRC message, send explicit chunks in order:
+
+```text
+@DeepseekAI prompt <channel> First part of the instructions.
+@DeepseekAI promptappend <channel> Next part of the instructions.
+@DeepseekAI promptappend <channel> Final part of the instructions.
+@DeepseekAI prompt <channel>
+@flush
+```
+
+Each append joins the new chunk with a space and updates the same configuration
+value. Wait for each success reply before sending the next chunk. `prompt`
+replaces the old text; `promptappend` extends the effective text, including the
+default if no override exists yet. Omit `<channel>` when working in the target
+channel. Visual wrapping in your IRC client does not split a message, but actual
+new messages or pasted lines are not automatically combined: every continuation
+needs its own `promptappend` command. Long prompt replies use Limnoria's normal
+pagination; ask `@more` privately for the remaining text when indicated.
+
+You can also use `config` directly. First run `@DeepseekAI status` in the target
+channel to register its configuration entries, then set the fully qualified
+entry, replacing both placeholders:
 
 ```text
 @config plugins.DeepseekAI.systemPrompt.:<network>.<channel> Be a helpful technical assistant. Answer only in English, concisely and with dry wit.
@@ -132,8 +167,11 @@ See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-ch
 | `@aiweb <question>` | Search the web and answer with sources; question up to 128 characters. |
 | `@DeepseekAI forget` | Clear your context in the current channel or private chat. |
 | `@DeepseekAI aiusage` | Receive your daily usage and global totals privately. |
+| `@DeepseekAI balance` | Fetch the live DeepSeek account balance privately; owner only. |
 | `@DeepseekAI status` | Check whether the plugin is enabled here. |
 | `@DeepseekAI nickreply on\|off` | Toggle nick prompts for this network/channel; owner only. |
+| `@DeepseekAI prompt [channel] [instructions]` | Set a channel's personality on this network, or view it privately; owner only. |
+| `@DeepseekAI promptappend [channel] <instructions>` | Append another chunk to the prompt; owner only. |
 | `@DeepseekAI enable` | Enable this channel; owner only. |
 | `@DeepseekAI disable` | Disable this channel; owner only. |
 | `@DeepseekAI resetusage` | Reset daily counters when no calls are active; owner only. |
@@ -175,6 +213,18 @@ Daily counters reset at midnight in the bot process's local timezone. They are
 saved atomically to `data/DeepseekAI/usage.json` and survive reloads/restarts.
 If an attempt cannot be saved, the plugin does not call the API. Short-term
 cooldowns, rolling RPM state, and server backoff reset on reload.
+
+Token totals come from the API's `usage.total_tokens` in successful completion
+responses. Attempts, successful replies, and web attempts are counted locally.
+They describe this plugin's activity, rather than an account-wide billing report.
+See [Token & Token Usage](https://api-docs.deepseek.com/quick_start/token_usage/).
+
+As owner, use `@DeepseekAI balance` to fetch the account's current balance from
+DeepSeek's [balance API](https://api-docs.deepseek.com/api/get-user-balance/).
+The response is private and includes currency, total balance, granted credits,
+topped-up balance, and whether funds are available for API calls. This is an
+account balance, not cumulative daily usage; it does not replace local quota
+counters or count as an AI attempt. No balance request is made automatically.
 
 ## Web search
 
@@ -231,9 +281,26 @@ do not combine channel histories. Only successful exchanges are retained, and
 stored replies use the same bounded text sent to IRC. Expired context is removed
 when a question is processed. Set `historyExchanges` to `0` to disable memory.
 
-History is held in memory and is cleared by plugin reloads or bot restarts.
-Daily usage counters are persisted separately. Your question and the included
-history are sent to DeepSeek; previous ChatGPT conversations are not involved.
+History is held in memory and saved to `data/DeepseekAI/history.json` after each
+successful exchange. Plugin reloads and bot restarts restore it automatically;
+there is no need to wait for SIGTERM or run `flush`. Wall-clock timestamps keep
+the retention period valid across restarts. Expired exchanges are removed on
+load and when a question is processed, and each conversation still respects
+`historyExchanges`. Setting this to `0` clears retained history on the next
+load or question. Daily usage counters are persisted separately.
+
+History is plain-text JSON with file permissions restricted to the bot user.
+Writes use a temporary file and atomic replacement to avoid partial histories.
+`forget` also saves the deletion, so forgotten context does not return after a
+restart. If deletion cannot be saved, it reports an error and retains the
+in-memory history so you can retry. If saving a new exchange fails, the bot
+still answers and sends a private warning that the history is only in memory.
+An unreadable or invalid history file is logged without its conversation text,
+and the plugin starts without loading it. An in-flight exchange that never
+finishes cannot be restored.
+
+Your question and the included history are sent to DeepSeek; previous ChatGPT
+conversations are not involved.
 Customize the bot's personality with `plugins.DeepseekAI.systemPrompt`.
 
 ## Tests

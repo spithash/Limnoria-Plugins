@@ -28,7 +28,9 @@
 
 ###
 
+import json
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -64,6 +66,9 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.save = patch.object(self.callback, "_save_usage", return_value=True)
         self.save_mock = self.save.start()
         self.addCleanup(self.save.stop)
+        self.history_save = patch.object(self.callback, "_save_history", return_value=True)
+        self.history_save_mock = self.history_save.start()
+        self.addCleanup(self.history_save.stop)
         channel_value = self.callback.registryValue("enabled", self.channel, value=False)
         self.originals[channel_value] = channel_value()
         channel_value.setValue(True)
@@ -231,6 +236,80 @@ class DeepseekAITestCase(ChannelPluginTestCase):
             self.assertError("deepseekai nickreply maybe")
         self.post.assert_not_called()
 
+    def testPromptCommandSetsScopedInstructionsAndShowsPrivately(self):
+        value = conf.supybot.plugins.DeepseekAI.systemPrompt.get(
+            ":" + self.irc.network).get(self.channel)
+        self.originals.setdefault(value, value())
+        default = self.callback.registryValue("systemPrompt")
+        with patch("supybot.ircdb.checkCapability", return_value=False):
+            self.assertError("deepseekai prompt Answer in English.")
+            self.assertError("deepseekai prompt")
+        self.assertEqual(value(), default)
+        original = ircdb.checkCapability
+        def check(prefix, capability, *args, **kwargs):
+            return capability == "owner" or original(prefix, capability, *args, **kwargs)
+        with patch("supybot.ircdb.checkCapability", side_effect=check):
+            self.assertNotError("deepseekai prompt Answer only in English with dry irony.")
+            response = self.assertResponse("deepseekai prompt",
+                "Prompt for %s %s: Answer only in English with dry irony." % (
+                    self.irc.network, self.channel))
+            self.assertEqual(response.args[0], self.nick)
+            self.assertError('deepseekai prompt " "')
+        self.assertEqual(value(), "Answer only in English with dry irony.")
+        self.assertEqual(self.callback.registryValue("systemPrompt", self.channel), default)
+        self.assertEqual(self.callback.registryValue("systemPrompt", "#elsewhere",
+                         network=self.irc.network), default)
+        with patch("supybot.world.getIrc", return_value=self.irc):
+            self.assertEqual(self.callback.registryValue("systemPrompt", self.channel,
+                             network="anothernetwork"), default)
+        self.post.assert_not_called()
+        self.assertResponse("ai hello", "Hello from DeepSeek.")
+        self.assertTrue(self.post.call_args.kwargs["json"]["messages"][0]["content"].startswith(value()))
+
+    def testPromptRemoteChannelAndLongPromptChunks(self):
+        value = conf.supybot.plugins.DeepseekAI.systemPrompt.get(
+            ":" + self.irc.network).get(self.channel)
+        self.originals.setdefault(value, value())
+        default = self.callback.registryValue("systemPrompt")
+        with patch("supybot.ircdb.checkCapability", return_value=False):
+            self.assertError("deepseekai promptappend " + self.channel + " Extra instructions.")
+        original = ircdb.checkCapability
+        def check(prefix, capability, *args, **kwargs):
+            return capability == "owner" or original(prefix, capability, *args, **kwargs)
+        chunks = ["Reply in English. " + "Useful instructions. " * 9,
+                  "Use dry irony. " + "More instructions. " * 9,
+                  "No forced jokes. " + "Final instructions. " * 9]
+        with patch("supybot.ircdb.checkCapability", side_effect=check):
+            self.assertNotError("deepseekai prompt " + self.channel + " " + chunks[0],
+                                to="#elsewhere")
+            for chunk in chunks[1:]:
+                self.assertNotError("deepseekai promptappend " + self.channel + " " + chunk,
+                                    private=True)
+            self.assertEqual(value(), " ".join(chunk.strip() for chunk in chunks))
+            self.assertGreater(len(value()), 512)
+            self.assertError('deepseekai promptappend ' + self.channel + ' " "')
+            self.assertError("deepseekai promptappend " + self.channel)
+            for setting, number in ((conf.supybot.reply.mores.length, 200),
+                                    (conf.supybot.reply.mores.instant, 1),
+                                    (conf.supybot.reply.mores.instant.whenPrivate, 1)):
+                self.originals.setdefault(setting, setting())
+                setting.setValue(number)
+            response = self.assertRegexp("deepseekai prompt " + self.channel,
+                                         "more messages", to="#elsewhere")
+            self.assertEqual(response.args[0], self.nick)
+            response = self.assertNotError("more", private=True)
+            self.assertEqual(response.args[0], self.nick)
+        self.assertEqual(self.callback.registryValue("systemPrompt", self.channel), default)
+        self.assertEqual(self.callback.registryValue("systemPrompt", "#elsewhere",
+                         network=self.irc.network), default)
+        with tempfile.TemporaryDirectory() as folder:
+            from supybot import registry
+            filename = os.path.join(folder, "settings.conf")
+            registry.close(conf.supybot.plugins.DeepseekAI, filename)
+            with open(filename, encoding="utf-8") as stream:
+                self.assertIn(value(), stream.read())
+        self.post.assert_not_called()
+
     def testSystemPromptDefaultsAndNetworkChannelOverrides(self):
         default = conf.supybot.plugins.DeepseekAI.systemPrompt()
         self.assertResponse("ai default", "Hello from DeepSeek.")
@@ -380,10 +459,10 @@ class DeepseekAITestCase(ChannelPluginTestCase):
 
     def testHistoryExpiryAndLimit(self):
         key = ("user", "#channel")
-        self.callback._history[key] = [(time.monotonic() - 90000, "expired", "old")]
+        self.callback._history[key] = [(time.time() - 90000, "expired", "old")]
         self.assertEqual(self.callback._get_history(key), [])
         self.assertNotIn(key, self.callback._history)
-        self.callback._history[key] = [(time.monotonic(), str(i), "answer") for i in range(25)]
+        self.callback._history[key] = [(time.time(), str(i), "answer") for i in range(25)]
         self.assertEqual(len(self.callback._get_history(key)), 40)
         self.assertEqual(self.callback._get_history(key)[0]["content"], "5")
 
@@ -391,6 +470,123 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         conf.supybot.plugins.DeepseekAI.historyExchanges.setValue(0)
         self.assertResponse("ai hello", "Hello from DeepSeek.")
         self.assertFalse(self.callback._history)
+
+    def testHistoryRoundTripExpiresAndKeepsIdentityIsolation(self):
+        now = time.time()
+        first = ("network-one:user@host", "#one")
+        others = [(first[0], "#two"), ("network-two:user@host", "#one"),
+                  ("network-one:other@host", "#one"), (first[0], "private")]
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._history_file = os.path.join(folder, "history.json")
+            self.callback._history = {key: [(now, "question " + str(i), "answer")]
+                                      for i, key in enumerate([first] + others)}
+            self.callback._history[first].insert(0, (now - 90000, "expired", "answer"))
+            self.assertTrue(plugin.DeepseekAI._save_history(self.callback))
+            self.assertEqual(stat.S_IMODE(os.stat(self.callback._history_file).st_mode), 0o600)
+            self.callback._history.clear()
+            # A new process has a different monotonic clock; history uses UTC epochs.
+            with patch.object(plugin.time, "monotonic", return_value=1):
+                self.callback._load_history()
+            self.assertEqual(len(self.callback._history), 5)
+            self.assertEqual(self.callback._get_history(first)[0]["content"], "question 0")
+            for i, key in enumerate(others, 1):
+                self.assertEqual(self.callback._get_history(key)[0]["content"], "question " + str(i))
+
+    def testHistoryMalformedFileDoesNotLoadOrExposeContents(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._history_file = os.path.join(folder, "history.json")
+            for payload in ("not JSON private contents", json.dumps({"version": 99}),
+                            json.dumps({"version": 1, "conversations": [{"user": "u",
+                                "target": "#c", "exchanges": [["bad time", "private", "reply"]]}]})):
+                with open(self.callback._history_file, "w") as stream:
+                    stream.write(payload)
+                with patch.object(self.callback.log, "error") as logged:
+                    self.callback._load_history()
+                self.assertFalse(self.callback._history)
+                self.assertEqual(logged.call_args.args, (
+                    "Unable to load DeepseekAI conversation history.",))
+
+    def testHistoryAtomicFailurePreservesSavedFile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._history_file = os.path.join(folder, "history.json")
+            self.callback._history = {("user", "#one"): [(time.time(), "old", "answer")]}
+            self.assertTrue(plugin.DeepseekAI._save_history(self.callback))
+            with open(self.callback._history_file, "rb") as stream:
+                saved = stream.read()
+            self.callback._history.clear()
+            with patch.object(plugin.os, "replace", side_effect=PermissionError):
+                self.assertFalse(plugin.DeepseekAI._save_history(self.callback))
+            with open(self.callback._history_file, "rb") as stream:
+                self.assertEqual(stream.read(), saved)
+            self.assertEqual(os.listdir(folder), ["history.json"])
+
+    def testHistoryWriteFailureStillAnswersAndWarnsPrivately(self):
+        self.history_save_mock.return_value = False
+        irc = Mock(network=self.irc.network)
+        msg = ircmsgs.privmsg(self.channel, "@ai hello", prefix=self.prefix)
+        msg.channel = self.channel
+        self.callback._query(irc, msg, "hello")
+        irc.reply.assert_called_once_with("Hello from DeepSeek.", prefixNick=True)
+        warning = irc.queueMsg.call_args.args[0]
+        self.assertEqual(warning.command, "NOTICE")
+        self.assertEqual(warning.args[0], self.nick)
+        self.assertIn("could not be saved", warning.args[1])
+        self.assertFalse(self.callback._active_users)
+
+    def testForgetPersistsAndFailureRestoresHistory(self):
+        self.assertResponse("ai remember this", "Hello from DeepSeek.")
+        saved_history = dict(self.callback._history)
+        self.history_save_mock.return_value = False
+        self.assertRegexp("deepseekai forget", "Could not save cleared history")
+        self.assertEqual(self.callback._history, saved_history)
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._history_file = os.path.join(folder, "history.json")
+            self.history_save_mock.side_effect = lambda: plugin.DeepseekAI._save_history(self.callback)
+            self.assertNotError("deepseekai forget")
+            self.callback._history = saved_history
+            self.callback._load_history()
+            self.assertFalse(self.callback._history)
+
+    def testSuccessfulExchangeReallyRestoresAfterReload(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.callback._history_file = os.path.join(folder, "history.json")
+            self.history_save_mock.side_effect = lambda: plugin.DeepseekAI._save_history(self.callback)
+            self.assertResponse("ai before restart", "Hello from DeepSeek.")
+            self.callback._history.clear()
+            self.callback._load_history()
+            self.assertResponse("ai after restart", "Hello from DeepSeek.")
+            messages = self.post.call_args.kwargs["json"]["messages"]
+            self.assertEqual([message["content"] for message in messages[1:]],
+                             ["before restart", "Hello from DeepSeek.", "after restart"])
+
+    def testBalanceIsOwnerOnlyPrivateAndFromApi(self):
+        get = self.client.return_value.__enter__.return_value.get
+        get.return_value = httpx.Response(200, json={"is_available": True,
+            "balance_infos": [{"currency": "USD", "total_balance": "12.50",
+                "granted_balance": "2.50", "topped_up_balance": "10.00"}]})
+        with patch("supybot.ircdb.checkCapability", return_value=False):
+            self.assertError("deepseekai balance")
+        get.assert_not_called()
+        original = ircdb.checkCapability
+        def check(prefix, capability, *args, **kwargs):
+            return capability == "owner" or original(prefix, capability, *args, **kwargs)
+        with patch("supybot.ircdb.checkCapability", side_effect=check):
+            response = self.assertResponse("deepseekai balance",
+                "DeepSeek account balance: USD total 12.50 (granted 2.50; topped up 10.00). "
+                "Available for API calls: yes.")
+            self.assertEqual(response.args[0], self.nick)
+            self.assertEqual(get.call_args.args[0], plugin.DeepseekAI.BALANCE_URL)
+            self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-secret-key")
+            get.return_value = httpx.Response(200, json={"is_available": True,
+                "balance_infos": [{"currency": "USD", "total_balance": "NaN",
+                    "granted_balance": "0", "topped_up_balance": "0"}]})
+            response = self.assertRegexp("deepseekai balance", "invalid balance response")
+            self.assertEqual(response.args[0], self.nick)
+            get.side_effect = httpx.ReadTimeout("private authentication details")
+            response = self.assertRegexp("deepseekai balance", "timed out")
+            self.assertEqual(response.args[0], self.nick)
+        self.assertEqual(self.callback._attempts, 0)
+        self.post.assert_not_called()
 
     def testSafeFormattingAndLength(self):
         text = self.callback._format_answer("\x01ACTION test\x01\r\n**bold** `code`\x00")

@@ -33,15 +33,17 @@ import json
 import math
 import os
 import re
+import tempfile
 import threading
 import time
 from collections import deque
 from email.utils import parsedate_to_datetime
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
 import httpx
 from supybot import callbacks, conf, ircmsgs, ircutils
-from supybot.commands import wrap
+from supybot.commands import additional, wrap
 
 
 class DeepseekAI(callbacks.Plugin):
@@ -49,6 +51,7 @@ class DeepseekAI(callbacks.Plugin):
     threaded = True
     API_URL = "https://api.deepseek.com/chat/completions"
     SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
+    BALANCE_URL = "https://api.deepseek.com/user/balance"
 
     def __init__(self, irc):
         super().__init__(irc)
@@ -67,7 +70,72 @@ class DeepseekAI(callbacks.Plugin):
         self._web_attempts = 0
         self._data_file = os.path.join(
             conf.supybot.directories.data(), "DeepseekAI", "usage.json")
+        self._history_file = os.path.join(
+            conf.supybot.directories.data(), "DeepseekAI", "history.json")
         self._load_usage()
+        self._load_history()
+
+    def _load_history(self):
+        try:
+            with open(self._history_file, encoding="utf-8") as stream:
+                data = json.load(stream)
+            if data.get("version") != 1 or not isinstance(data.get("conversations"), list):
+                raise ValueError("Invalid history format")
+            restored = {}
+            now = time.time()
+            for conversation in data["conversations"]:
+                user, target = conversation["user"], conversation["target"]
+                if (not isinstance(user, str) or not user or not isinstance(target, str)
+                        or not target or not isinstance(conversation["exchanges"], list)):
+                    raise ValueError("Invalid conversation")
+                exchanges = []
+                for entry in conversation["exchanges"]:
+                    if (not isinstance(entry, list) or len(entry) != 3
+                            or type(entry[0]) not in (int, float)
+                            or not math.isfinite(entry[0]) or not 0 <= entry[0] <= now + 300
+                            or not isinstance(entry[1], str) or not isinstance(entry[2], str)):
+                        raise ValueError("Invalid exchange")
+                    exchanges.append(tuple(entry))
+                key = (user, target)
+                if key in restored:
+                    raise ValueError("Duplicate conversation")
+                restored[key] = exchanges
+            self._history = restored
+            if self._prune_history():
+                self._save_history()
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            self.log.error("Unable to load DeepseekAI conversation history.")
+
+    def _save_history(self):
+        # Caller holds _lock (or is initializing). Use wall-clock timestamps
+        # across process restarts and an atomic, private file for conversation text.
+        temporary = None
+        try:
+            folder = os.path.dirname(self._history_file)
+            os.makedirs(folder, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
+                                             prefix=".history-", delete=False) as stream:
+                temporary = stream.name
+                json.dump({"version": 1, "conversations": [
+                    {"user": user, "target": target, "exchanges": exchanges}
+                    for (user, target), exchanges in self._history.items()
+                ]}, stream, ensure_ascii=False, allow_nan=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._history_file)
+            temporary = None
+        except (OSError, ValueError):
+            self.log.error("Unable to persist DeepseekAI conversation history.")
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+        return True
 
     def _load_usage(self):
         try:
@@ -187,16 +255,23 @@ class DeepseekAI(callbacks.Plugin):
         self._active_users.add(user)
         return None
 
-    def _get_history(self, key):
-        now = time.monotonic()
+    def _prune_history(self):
+        now = time.time()
         ttl = self.registryValue("historyHours") * 3600
         count = self.registryValue("historyExchanges")
+        changed = False
         for saved_key, exchanges in list(self._history.items()):
             recent = [entry for entry in exchanges if now - entry[0] < ttl]
             if recent and count:
                 self._history[saved_key] = recent[-count:]
             else:
                 del self._history[saved_key]
+            changed = changed or self._history.get(saved_key) != exchanges
+        return changed
+
+    def _get_history(self, key):
+        if self._prune_history():
+            self._save_history()
         return [message for _, question, answer in self._history.get(key, [])
                 for message in ({"role": "user", "content": question},
                                 {"role": "assistant", "content": answer})]
@@ -384,8 +459,11 @@ class DeepseekAI(callbacks.Plugin):
                 count = self.registryValue("historyExchanges")
                 if count:
                     exchanges = self._history.setdefault(key, [])
-                    exchanges.append((time.monotonic(), question, ircutils.stripFormatting(rendered)))
+                    exchanges.append((time.time(), question, ircutils.stripFormatting(rendered)))
                     del exchanges[:-count]
+                    if not self._save_history():
+                        self._notice(irc, msg, user,
+                            "Your reply is ready, but conversation history could not be saved for restarts.")
             irc.reply(rendered + footer, prefixNick=True)
         except httpx.TimeoutException:
             self._notice(irc, msg, user, "DeepSeek timed out. Please try again later.")
@@ -495,6 +573,45 @@ class DeepseekAI(callbacks.Plugin):
         self.setRegistryValue("replyToNick", enabled, channel, network=irc.network)
         irc.replySuccess()
 
+    @wrap(["owner", "inChannel", additional("text")])
+    def prompt(self, irc, msg, args, channel, instructions):
+        """[<channel>] [<instructions>]
+
+        Set a channel's personality on this network (owner only). The channel
+        defaults to the current channel. Without instructions, show its prompt
+        privately. Use promptappend for additional chunks and flush to save.
+        """
+        if instructions is None:
+            text = self.registryValue("systemPrompt", channel, network=irc.network)
+            irc.reply("Prompt for %s %s: %s" % (irc.network, channel, text), private=True)
+            return
+        instructions = instructions.strip()
+        if not instructions:
+            irc.error("Please provide non-empty personality instructions.")
+            return
+        with self._lock:
+            self.setRegistryValue("systemPrompt", instructions, channel, network=irc.network)
+        irc.replySuccess()
+
+    @wrap(["owner", "inChannel", "text"])
+    def promptappend(self, irc, msg, args, channel, instructions):
+        """[<channel>] <instructions>
+
+        Append a chunk to a channel's personality on this network (owner only).
+        The channel defaults to the current channel. A space joins the chunks.
+        Start with prompt to replace the old prompt, then append further chunks.
+        Use flush to save configuration.
+        """
+        instructions = instructions.strip()
+        if not instructions:
+            irc.error("Please provide non-empty personality instructions.")
+            return
+        with self._lock:
+            current = self.registryValue("systemPrompt", channel, network=irc.network)
+            self.setRegistryValue("systemPrompt", current.rstrip() + " " + instructions,
+                                  channel, network=irc.network)
+        irc.replySuccess()
+
     @wrap([])
     def status(self, irc, msg, args):
         """Show AI, nick-reply, and nick-addressing settings for this location."""
@@ -521,8 +638,50 @@ class DeepseekAI(callbacks.Plugin):
             if user in self._active_users:
                 irc.error("Wait for your current @ai request to finish before clearing history.")
                 return
-            self._history.pop(key, None)
+            previous = self._history.pop(key, None)
+            if not self._save_history():
+                if previous is not None:
+                    self._history[key] = previous
+                irc.error("Could not save cleared history. Your history has not been forgotten; please try again.")
+                return
         irc.replySuccess()
+
+    @wrap(["owner"])
+    def balance(self, irc, msg, args):
+        """Fetch the live DeepSeek account balance privately (owner only)."""
+        api_key = self.registryValue("apiKey").strip()
+        if not api_key:
+            irc.error("DeepSeek API key is not set.", private=True)
+            return
+        try:
+            with httpx.Client(timeout=self.registryValue("requestTimeout")) as client:
+                response = client.get(self.BALANCE_URL,
+                    headers={"Authorization": "Bearer " + api_key, "Accept": "application/json"})
+            if response.status_code != 200:
+                irc.error(self._api_error(response), private=True)
+                return
+            data = response.json()
+            balances = data["balance_infos"]
+            if type(data["is_available"]) is not bool or not isinstance(balances, list) or not 1 <= len(balances) <= 2:
+                raise ValueError("Invalid balance response")
+            parts = []
+            for balance in balances:
+                currency = balance["currency"]
+                if currency not in ("USD", "CNY"):
+                    raise ValueError("Invalid currency")
+                amounts = [Decimal(balance[field]) for field in (
+                    "total_balance", "granted_balance", "topped_up_balance")]
+                if any(not amount.is_finite() or amount < 0 for amount in amounts):
+                    raise ValueError("Invalid balance")
+                parts.append("%s total %s (granted %s; topped up %s)" % (currency, *amounts))
+            irc.reply("DeepSeek account balance: %s. Available for API calls: %s." % (
+                "; ".join(parts), "yes" if data["is_available"] else "no"), private=True)
+        except httpx.TimeoutException:
+            irc.error("DeepSeek balance request timed out.", private=True)
+        except httpx.HTTPError:
+            irc.error("Could not fetch DeepSeek account balance.", private=True)
+        except (ValueError, KeyError, TypeError, InvalidOperation):
+            irc.error("DeepSeek returned an invalid balance response.", private=True)
 
     @wrap([])
     def aiusage(self, irc, msg, args):

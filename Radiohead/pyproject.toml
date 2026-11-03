@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "limnoria-radiohead"
+version = "0.0.0"
+authors = [
+    { name = "Stathis Xantinidis @ https://github.com/spithash" }
+]
+readme = "README.md"
+dependencies = [
+    "limnoria",
+    "ephem>=4.1",
+    "beautifulsoup4>=4.12",
+]
+classifiers = [
+    'Environment :: Plugins',
+    'Programming Language :: Python :: 3',
+    'Topic :: Communications :: Chat',
+]
+
+[project.entry-points.'limnoria.plugins']
+Radiohead = "limnoria_radiohead"
+
+[tool.setuptools.package-dir]
+"limnoria_radiohead" = "."
+"limnoria_radiohead.local" = "local/"
+
+[tool.setuptools.package-data]
+"limnoria_radiohead" = ["locales/*.po", "*.json", "THIRD_PARTY_NOTICES.md"]

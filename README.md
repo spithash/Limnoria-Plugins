@@ -11,3 +11,4 @@
 11. Query Groq's AI models from IRC. [GroqAI](https://github.com/spithash/Limnoria-Plugins/tree/main/GroqAI)
 12. Answers questions, performs calculations, and converts units with Wolfram|Alpha --> [WolframAlpha](https://github.com/spithash/Limnoria-Plugins/tree/main/WolframAlpha)
 13. Query DeepSeek AI with conversation history and flood protection --> [DeepseekAI](https://github.com/spithash/Limnoria-Plugins/tree/main/DeepseekAI)
+14. Amateur radio tools for propagation, spots, satellites, launches, aviation, astronomy, QSL activity, and offline radio utilities --> [Radiohead](https://github.com/spithash/Limnoria-Plugins/tree/main/Radiohead)

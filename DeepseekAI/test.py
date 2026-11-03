@@ -482,7 +482,7 @@ class DeepseekAITestCase(ChannelPluginTestCase):
                                       for i, key in enumerate([first] + others)}
             self.callback._history[first].insert(0, (now - 90000, "expired", "answer"))
             self.assertTrue(plugin.DeepseekAI._save_history(self.callback))
-            self.assertEqual(stat.S_IMODE(os.stat(self.callback._history_file).st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(os.stat(self.callback._history_file).st_mode), 0o640)
             self.callback._history.clear()
             # A new process has a different monotonic clock; history uses UTC epochs.
             with patch.object(plugin.time, "monotonic", return_value=1):

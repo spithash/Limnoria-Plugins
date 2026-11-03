@@ -110,7 +110,8 @@ class DeepseekAI(callbacks.Plugin):
 
     def _save_history(self):
         # Caller holds _lock (or is initializing). Use wall-clock timestamps
-        # across process restarts and an atomic, private file for conversation text.
+        # across process restarts. The bot owns the file; its group can read it
+        # for backups, and other users have no access.
         temporary = None
         try:
             folder = os.path.dirname(self._history_file)
@@ -122,6 +123,7 @@ class DeepseekAI(callbacks.Plugin):
                     {"user": user, "target": target, "exchanges": exchanges}
                     for (user, target), exchanges in self._history.items()
                 ]}, stream, ensure_ascii=False, allow_nan=False)
+                os.fchmod(stream.fileno(), 0o640)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self._history_file)

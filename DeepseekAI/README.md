@@ -289,7 +289,8 @@ load and when a question is processed, and each conversation still respects
 `historyExchanges`. Setting this to `0` clears retained history on the next
 load or question. Daily usage counters are persisted separately.
 
-History is plain-text JSON with file permissions restricted to the bot user.
+History is plain-text JSON saved with `640` permissions: the bot user can read
+and write it, its group can read it for backups, and other users have no access.
 Writes use a temporary file and atomic replacement to avoid partial histories.
 `forget` also saves the deletion, so forgotten context does not return after a
 restart. If deletion cannot be saved, it reports an error and retains the

@@ -1,13 +1,12 @@
-Radiohead provides amateur radio conditions, reception spots, satellite passes
-and frequencies, launch schedules, aviation reports, Sun/Moon positions,
-public QSL activity, grid calculations, and offline radio utilities for Limnoria.
+# Radiohead
 
-Install dependencies in the bot's Python environment: `ephem` and
-`beautifulsoup4` (declared in `pyproject.toml`). Both are already available
-in this workspace's Limnoria environment.
+Radiohead adds amateur radio conditions and tools to Limnoria, including live
+propagation data, reception spots, satellite passes and frequencies, launches,
+aviation reports, astronomy, public QSL activity, and offline utilities.
 
-Load with `load Radiohead`, then use `bands` (for example, `!bands` if your
-bot's command prefix is `!`).
+Install the dependencies declared in `pyproject.toml` (`ephem` and
+`beautifulsoup4`), then load the plugin with `load Radiohead`. Commands use
+the bot's configured IRC prefix.
 
 The command shows HamQSL/N0NBH's update time, solar flux, sunspot number,
 A/K indices, and four groups of HF bands with day/night ratings. These are
@@ -53,7 +52,7 @@ feeds produce a short error message.
 
 ## More radio reports
 
-All commands use the bot's configured prefix and require no API keys.
+The commands below do not require API keys.
 
 | Command | Output | Cache |
 | --- | --- | --- |
@@ -84,7 +83,7 @@ implemented in Python for Limnoria.
 
 ## Community radio commands
 
-Examples below omit your configured command prefix.
+Examples below omit the configured command prefix.
 
 | Command | Example | Purpose |
 | --- | --- | --- |
@@ -112,11 +111,9 @@ If one source fails, `spots` explicitly labels its partial results.
 `activity` caches each mode/grid query for five minutes. Activity is reported
 reception, not a propagation score or a count of unique stations.
 
-PSK Reporter returned HTTP 403 during development from this environment.
-Its reception and activity parsers were tested with fixtures, but live PSK
-retrieval could not be verified here. These commands report source failures
-without interpreting a blocked response as zero activity. `spots` can still
-return matching POTA reports while PSK Reporter is unavailable.
+PSK Reporter may rate-limit or block requests. The commands report source
+failures instead of treating them as zero activity; `spots` can still return
+matching POTA reports when PSK Reporter is unavailable.
 
 `contests` caches the WA7BNM weekly iCalendar feed for 30 minutes and filters
 finished events on every invocation. It is limited to the events published
@@ -197,11 +194,12 @@ METAR reports are cached for five minutes and retain the observation timestamp.
 
 `qsl` uses public Callook/FCC, LoTW, and eQSL information. Callook data is
 cached for 24 hours, the LoTW CSV for 24 hours, and eQSL pages for one hour.
-Callbook data is currently available for US amateur licenses. Missing source data is labelled unavailable, not
-"not registered." eQSL profiles can have historical QTH date ranges; finding
-a profile does not guarantee a station currently accepts eQSL confirmations.
-QRZ lookups and Club Log's authenticated checks are omitted. ARRL hamfest
-searches are cached for one hour and use the public search form.
+Callbook data is available for US amateur licenses. A missing profile is
+different from a source failure. eQSL profiles can show historical QTH dates;
+a profile does not guarantee that a station currently accepts eQSL
+confirmations. QRZ profile lookups and authenticated Club Log checks are not
+included. ARRL hamfest searches use the public search form and are cached for
+one hour.
 
 `wwv` is a playful text emulation, not a calibrated time signal. It uses the
 host clock and IRC delivery can lag. It allows one pending tone per network
@@ -210,9 +208,8 @@ Radiohead unloads/reloads. Requests arriving too close to the next minute
 use the following minute so the four-second announcement can be sent.
 The offline HoFH command uses 292 entries from qrmbot's excuse list.
 
-Skipped credential-requiring services: **QRZ**, **APRS.fi**, authenticated
-**Club Log**, **Google Maps geocoding**, and optional **adsb.fi/FlightAware**
-enrichment. No credentials were requested, read, stored, or added to configuration.
+QRZ, APRS.fi, authenticated Club Log, Google Maps geocoding, and optional
+adsb.fi/FlightAware enrichment are not included because they require credentials.
 
 Additional source URLs:
 

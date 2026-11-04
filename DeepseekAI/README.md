@@ -163,12 +163,18 @@ See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-ch
 
 | Command | Purpose |
 | --- | --- |
-| `@ai <question>` | Ask DeepSeek with your recent context here. |
-| `@aiweb <question>` | Search the web and answer with sources; question up to 128 characters. |
-| `@DeepseekAI forget` | Clear your context in the current channel or private chat. |
+| `@ai <question>` | Ask DeepSeek with your recent context; search automatically when needed. |
+| `@aiweb <question>` | Always search the web and answer with sources. |
+| `@DeepseekAI history [channel] on\|off` | Enable/disable history in a target channel on this network; owner only. |
+| `@DeepseekAI profiling [channel] on\|off` | Enable/disable profile learning/use in a target channel on this network; owner only. |
+| `@DeepseekAI profile <channel> on\|off` | Alias for the owner-only channel profiling switch. |
+| `@DeepseekAI forget [channel] [nick]` | Clear a user's exchanges and profile in the target channel; owner only; defaults to the current location and yourself. |
+| `@DeepseekAI forgetchannel [channel]` | Clear a target channel's conversations and profiles; owner only. |
+| `@DeepseekAI profile [show/reset/on/off/set/unset]` | Inspect or adjust your own profile privately; personal opt-in cannot override the channel switch. |
 | `@DeepseekAI aiusage` | Receive your daily usage and global totals privately. |
 | `@DeepseekAI balance` | Fetch the live DeepSeek account balance privately; owner only. |
-| `@DeepseekAI status` | Check whether the plugin is enabled here. |
+| `@DeepseekAI responsechars [network] [channel] [limit]` | Set/show an exact network/channel reply limit from a debug channel or PM; owner only. |
+| `@DeepseekAI status [channel]` | Show AI, nick replies/addressing, personality, history, profiling, and reply limit for a target channel or current location. |
 | `@DeepseekAI nickreply on\|off` | Toggle nick prompts for this network/channel; owner only. |
 | `@DeepseekAI prompt [channel] [instructions]` | Set a channel's personality on this network, or view it privately; owner only. |
 | `@DeepseekAI promptappend [channel] <instructions>` | Append another chunk to the prompt; owner only. |
@@ -195,10 +201,26 @@ All settings below are under `plugins.DeepseekAI`.
 | `dailyTokensPerUser` | 0 | Optional per-user daily token threshold. |
 | `globalDailyTokens` | 0 | Optional global daily token threshold. |
 | `maxQuestionChars` | 1000 | Maximum question length. |
-| `maxResponseChars` | 800 | Maximum answer length sent to IRC. |
+| `maxResponseChars` | 800 | Maximum complete answer, including citations and formatting; supports network/channel overrides. |
 | `maxTokens` | 512 | Maximum output tokens per API call. |
 | `requestTimeout` | 45 | HTTP timeout in seconds. |
 | `webDailyLimit` | 15 | Shared daily web attempts across all users, channels, and networks; 0 disables web search. |
+| `autoWeb` | True | Allow `@ai` and nick prompts to search when external evidence or current facts are needed. |
+| `webShowUrls` | True | Show up to two cited source links; False shows source domains instead. |
+| `webSearchPrompt` | Research guidance | Configurable search decisions and evidence guidance, separate from personality; supports network/channel overrides. |
+| `historyEnabled` | False | Use/record conversation history; network/channel overrides, owner-controlled. |
+| `historyMode` | channel | Shared AI conversation or separate user histories; private messages always remain per user. |
+| `profilesEnabled` | False | Use/learn requester profiles; independent network/channel switch, owner-controlled. |
+| `historyExchanges` | 20 | Maximum retained exchanges per conversation. |
+| `historyHours` | 24 | Retention for legacy/per-user conversations. |
+| `sharedHistoryMinutes` | 60 | Shared channel conversation lifetime. |
+| `historyMaxChars` | 12000 | Conversation input budget; whole exchanges are retained. |
+| `profileReviewExchanges` | 8 | Review interval and minimum retained own excerpts (8–20). |
+| `profileObservationDays` | 30 | Tentative observation lifetime. |
+| `profileSampleDays` | 7 | Retention for up to 20 own question excerpts used in reviews. |
+| `conversationPrompt` | Conversation guidance | Shared-context guidance; supports network/channel overrides. |
+| `profilePrompt` | Personalization guidance | Profile-use guidance; supports network/channel overrides. |
+| `profileLearningPrompt` | Pattern guidance | Global instructions for periodic communication-style reviews. |
 | `formatting` | True | Convert Markdown emphasis to IRC formatting. |
 | `greyItalics` | True | Render italic passages in grey; False uses native IRC italic. |
 
@@ -215,7 +237,13 @@ If an attempt cannot be saved, the plugin does not call the API. Short-term
 cooldowns, rolling RPM state, and server backoff reset on reload.
 
 Token totals come from the API's `usage.total_tokens` in successful completion
-responses. Attempts, successful replies, and web attempts are counted locally.
+responses, including search planning even if the subsequent search or answer fails.
+One user question counts as one request attempt; a web answer can make two chat
+completion calls and one search call. An eligible profile review adds one more
+completion after the answer has been delivered. Request/RPM limits count user attempts,
+while token totals include all completion calls. Token thresholds are checked
+again before the final completion; an in-flight completion can exceed a threshold.
+Attempts, successful replies, and web attempts are counted locally.
 They describe this plugin's activity, rather than an account-wide billing report.
 See [Token & Token Usage](https://api-docs.deepseek.com/quick_start/token_usage/).
 
@@ -228,28 +256,91 @@ counters or count as an AI attempt. No balance request is made automatically.
 
 ## Web search
 
-`@aiweb latest Limnoria release` searches DeepSeek's web index using the same API
-key, then sends up to three bounded result summaries to the chat model. Replies
-include source links that fit within the response length limit. Retrieved text
-is treated as untrusted reference material. Search improves freshness, but the
-answer still needs to be checked against its sources.
+`@ai latest Limnoria release` can now search automatically. The model receives the
+current date/time and recent conversation, and can answer directly or request a
+search. It is instructed to search for changing facts (news, election results,
+prices, weather, officeholders, schedules, and latest releases), and to answer
+stable explanations, translations, and rewriting directly. This decision is
+model-driven and can occasionally miss; `@aiweb` always forces a search.
+
+`systemPrompt` controls personality and reply language. `webSearchPrompt` supplies
+the browsing guidance described above; change it globally or override it for a
+network/channel. An empty value omits that extra guidance. The plugin still
+supplies the current date, the applicable response limit, citation syntax, and
+the requirement to treat retrieved material as untrusted data. It adds no fixed
+answer-length target or extra personality instructions.
+
+`maxResponseChars` is enforced on the entire formatted answer plus its source
+footer. For example, to limit a particular network/channel to 215 characters:
+
+```text
+@DeepseekAI responsechars grnet #hackers 215
+```
+
+`responsechars` creates the exact scoped setting and reports its effective value.
+It accepts an explicit connected network, works from a debug channel or PM, and
+does not set a channel-only compatibility fallback. Omit the limit to read it;
+omit the network/channel to use the current location. Valid limits are 80–2000.
+Use `@flush` to save changes.
+
+Plain `@config plugins.DeepseekAI.maxResponseChars.:network.#channel ...` only
+works after that scoped registry entry exists. Limnoria's Config plugin checks
+registered paths before creating anything, so a previously unused channel may
+otherwise return “not a valid configuration variable.” Use `responsechars` to
+create it instead of relying on a prior AI request to instantiate the entry.
+The `config channel` command can create entries too, but also writes a legacy
+channel-only fallback, so `responsechars` is preferred for strict network isolation.
+
+Use the same scope syntax for `webSearchPrompt`. Unconfigured channels inherit
+the network value or global default. Private replies use the network/global
+fallback. Existing global limits and personality prompts survive plugin reloads.
+The response limit covers the answer body, including formatting and citations;
+Limnoria's nick prefix and IRC protocol framing are outside this limit.
+
+The model creates a focused query, a language code matching the question, and an
+optional publication cutoff for current events. The plugin enforces the query
+length and adds DeepSeek's `lang:` and `after:` operators. Both commands accept
+questions up to `maxQuestionChars`; only the generated search query must fit
+the provider's 128-character limit.
+
+Each search requests eight candidates with page content, then ranks by the
+provider's relevance score and authority tier, selecting up to three distinct
+hosts. Each selected source contributes at most 200 title characters, 1,000
+summary characters, and 4,000 page-content characters, with publication dates
+and quality metadata preserved. Missing page content falls back to summaries.
+The model is instructed to prefer primary sources and established reporting,
+distinguish forecasts from confirmed outcomes, and disclose stale, conflicting,
+or insufficient evidence. Quality metadata and publisher reputation are signals,
+not guarantees. Retrieved material is untrusted data, never instructions.
+
+Replies include only cited sources, at most two. Source footers occupy at most
+one third of the response budget. Long URLs fall back to source domains rather
+than being cut; citations lost when the answer is truncated have no footer.
+Set `webShowUrls` to False for domain-only attribution. The plugin attaches
+validated source URLs itself rather than trusting model-generated links.
 
 The default allowance is **15 web attempts per day for the entire bot**. It is
 saved with usage counters, survives reloads and restarts, and resets at midnight
 in the bot's local timezone. Failed searches and failed subsequent completions
 also consume an attempt. Web questions also count toward existing request and
-token limits and share cooldowns and concurrency slots with `@ai`. No automatic
-retries or full-page fetches are performed. `@DeepseekAI aiusage` shows the shared
+token limits and share cooldowns and concurrency slots with `@ai`. There is at
+most one search per question, with no automatic retries or additional fetch
+calls. Search failures or exhausted allowances stop the web answer with a notice
+instead of falling back to unverified model knowledge. `@DeepseekAI aiusage` shows the shared
 web counter; the owner command `resetusage` also resets this counter.
 
 At the published price of $0.75 per 1,000 successful searches, 15 searches daily
 cost at most about $0.34 in search fees over 30 days, plus normal model input and
 output charges. Search summaries add input tokens. See the
 [Search & Fetch guide](https://api-docs.deepseek.com/guides/search/) for current
-pricing. Ordinary `@ai` never searches and remains available when the web
-allowance is exhausted, subject to the existing shared limits.
+pricing. Ordinary `@ai` can still answer directly when the web allowance is
+exhausted, subject to the existing shared limits. If it requests current
+evidence, it reports that verification is unavailable.
 
 Change the allowance with `@config plugins.DeepseekAI.webDailyLimit 15`.
+Disable automatic searching with `@config plugins.DeepseekAI.autoWeb False`;
+`@aiweb` remains available. Tool calling must be supported by the configured
+model; the default `deepseek-flash` supports it with thinking disabled.
 
 ## IRC formatting
 
@@ -272,37 +363,154 @@ HTTP 429 and transient server errors pause new requests (respecting `Retry-After
 up to one hour). Calls are never automatically retried. Rejected-request warnings
 are private notices, limited to one per user every 15 seconds.
 
-## Conversation history
+## Conversation history and profiles
 
-`historyExchanges` defaults to **20 question/reply pairs per user per channel**;
-`historyHours` defaults to **24 hours**. Context is isolated across channels,
-networks, users, and private chats. Unlike the referenced Perl bot, private chats
-do not combine channel histories. Only successful exchanges are retained, and
-stored replies use the same bounded text sent to IRC. Expired context is removed
-when a question is processed. Set `historyExchanges` to `0` to disable memory.
+Both `historyEnabled` and `profilesEnabled` default to **False**. With both off,
+questions include no retained conversation or profile, successful requests store
+neither, and no profile review calls are made. Each switch supports independent
+network/channel overrides. Switching off stops use and recording/learning; it
+leaves existing stored data to expire or be explicitly deleted.
 
-History is held in memory and saved to `data/DeepseekAI/history.json` after each
-successful exchange. Plugin reloads and bot restarts restore it automatically;
-there is no need to wait for SIGTERM or run `flush`. Wall-clock timestamps keep
-the retention period valid across restarts. Expired exchanges are removed on
-load and when a question is processed, and each conversation still respects
-`historyExchanges`. Setting this to `0` clears retained history on the next
-load or question. Daily usage counters are persisted separately.
+To enable only in DALnet `#2600`, reload the plugin and run **in that channel on
+DALnet**, while identified as a bot owner:
 
-History is plain-text JSON saved with `640` permissions: the bot user can read
-and write it, its group can read it for backups, and other users have no access.
-Writes use a temporary file and atomic replacement to avoid partial histories.
-`forget` also saves the deletion, so forgotten context does not return after a
-restart. If deletion cannot be saved, it reports an error and retains the
-in-memory history so you can retry. If saving a new exchange fails, the bot
-still answers and sends a private warning that the history is only in memory.
-An unreadable or invalid history file is logged without its conversation text,
-and the plugin starts without loading it. An in-flight exchange that never
-finishes cannot be restored.
+```text
+@DeepseekAI history on
+@DeepseekAI profiling on
+@flush
+```
 
-Your question and the included history are sent to DeepSeek; previous ChatGPT
-conversations are not involved.
-Customize the bot's personality with `plugins.DeepseekAI.systemPrompt`.
+Use `off` to disable either feature. These two commands and both forget commands
+require the bot's **owner** capability, not merely channel operator status. The
+switch commands update exactly the selected channel on the current network;
+when no channel is supplied, they use the channel where you issued the command.
+Confirmations include the target network/channel and stay in the issuing channel
+or PM. `status [channel]` shows the selected channel's settings (or the current location when omitted), including history on/off and mode plus profiling on/off. Replies stay in the issuing channel or PM. Use `flush` to persist configuration changes. Equivalent configuration:
+
+```text
+supybot.plugins.DeepseekAI.historyEnabled: False
+supybot.plugins.DeepseekAI.profilesEnabled: False
+supybot.plugins.DeepseekAI.historyEnabled.\:DALnet.#2600: True
+supybot.plugins.DeepseekAI.profilesEnabled.\:DALnet.#2600: True
+```
+
+From a debug channel or private message **on DALnet**, target `#2600` explicitly:
+
+```text
+@DeepseekAI history #2600 on
+@DeepseekAI profile #2600 on
+@flush
+```
+
+`profiling #2600 on` is equivalent to `profile #2600 on`. The explicit-channel
+`profile` syntax is owner-only; `profile on/off` without a channel still controls
+only the requester's personal opt-out. Remote switch commands and `forgetchannel`
+require the bot to have joined the target channel. Cross-network changes still
+use the fully scoped `@config` paths above. Commands do not send messages into
+the target channel.
+
+When editing configuration files directly, stop the bot first to avoid its
+running registry overwriting the changes. The switches can also be changed with
+owner-authorized `@config plugins.DeepseekAI.historyEnabled.:DALnet.#2600 True`
+and the corresponding `profilesEnabled` setting.
+
+When enabled, `historyMode channel` shares only **AI exchanges**, with speaker
+nicknames, timestamps, questions, and the bot's actual replies including source
+attribution. Normal channel chatter is not recorded. The current requester is
+identified separately. No network/channel shares context with another, and
+private messages remain per user. Shared channels allow one active AI request
+at a time; overlapping requests receive a busy notice without being charged.
+Different channels can still run concurrently within the global cap.
+
+Shared history keeps at most 20 complete exchanges, no older than 60 minutes,
+and fits the configured 12,000-character serialized context budget. Profiles and
+speaker metadata are included in the shared context budget. Oldest complete
+exchanges are dropped first. `historyMode user` retains the old per-user
+behavior, bounded by `historyHours`, `historyExchanges`, and `historyMaxChars`.
+Existing version-1 per-user history is preserved separately, never silently
+merged into public channel history. Setting `historyExchanges` to zero clears
+conversation history on the next prune; profiling has its own independent switch.
+
+### User profiles
+
+Profiles belong to a user identity in one network/channel (or their separate
+private context), surviving nick changes while `user@host` stays the same. Only
+the current requester's profile is supplied for personalization; other people's
+profiles and internal hostmasks are not sent as conversation context.
+
+Explicit preferences are user-controlled, not guessed by the model:
+
+```text
+@DeepseekAI profile
+@DeepseekAI profile set reply_length short
+@DeepseekAI profile set tone direct
+@DeepseekAI profile set language en
+@DeepseekAI profile unset tone
+@DeepseekAI profile reset
+@DeepseekAI profile off
+```
+
+`reply_length` accepts short/normal/detailed; `tone` accepts
+neutral/playful/direct/formal; `language` accepts auto/en/el. Commands concern
+only the requester's own profile and reply privately. `reset` clears preferences,
+observations, and excerpts and restarts learning from new messages; it preserves
+a personal opt-out. `on` starts fresh and opts back in, but cannot enable a
+channel whose owner has disabled profiling. The channel personality and language
+instructions take precedence over preferences.
+
+After at least eight own exchanges and then periodically, the plugin can make
+one extra completion to review up to 20 own question excerpts (at most 1,000
+characters each, retained for seven days). These are kept separately from the
+shorter shared conversation window so occasional users can build a pattern over
+several visits. Reviews contain no other users' exchanges, bot replies, hostmasks,
+or web results. No profile is inferred from one message.
+
+A review can produce at most three observations from a fixed vocabulary:
+upbeat, playful, direct, formal, frustrated, technical, concise, detailed.
+Each requires evidence indexes from at least three distinct supplied excerpts.
+The plugin fixes descriptions and labels them tentative; arbitrary personality
+claims or extra profile fields are not accepted. Evidence checks validate the
+shape and cited messages, not the truth of the model's interpretation. New
+reviews replace old observations; observations expire after 30 days. Samples
+expire after seven days. Explicit preferences and opt-outs persist until changed.
+An inactive profile without preferences, observations, or an opt-out expires
+after 30 days.
+
+Reviews run after the answer is sent, still occupying that request's concurrency
+slot. Their tokens count toward the requesting user's and global totals, and
+reviews obey token thresholds and `maxTokens`. A failed review does not suppress
+or duplicate the answer. Request/RPM counters count questions, not each internal
+completion; reviews add input and output token costs when enabled.
+
+### Forgetting and storage
+
+As owner, use `@DeepseekAI forget Bob` in the relevant channel, or
+`@DeepseekAI forget #2600 Bob` from a debug channel or PM on the same network,
+to remove Bob's
+retained exchanges and their corresponding bot replies, profile preferences,
+observations, and learning excerpts. With no nickname it applies to yourself.
+Known online nicks are resolved through IRC state; offline historical names must
+identify exactly one retained user or the command refuses. This cannot erase
+other people's quotations, already displayed IRC messages, or external logs.
+`@DeepseekAI forgetchannel` clears all conversation and profile content for the
+current network/channel; `@DeepseekAI forgetchannel #2600` targets that channel
+from a debug channel or PM. Personal opt-outs survive both kinds of clearing. Clearing
+waits until relevant in-flight requests finish so they cannot reintroduce context.
+None of these commands changes channel personality, browsing guidance, or limits.
+
+History and profiles are saved together in version 2 of
+`data/DeepseekAI/history.json`, rather than separate files, so a forget operation
+cannot persist only half its deletion. The JSON contains `conversations` (legacy
+per-user history), `channels`, and `profiles` (including bounded review excerpts).
+The bot restores it on reload/restart, validates the format, and prunes expired
+entries. Writes use mode 640, fsync, and atomic replacement. A failed deletion
+restores both in-memory history and profiles and reports an error. Daily usage
+counters remain separate. Memory files and backups can contain user text; the
+plugin does not erase external backup copies.
+
+Your questions and the included memory are sent to DeepSeek. Previous ChatGPT
+conversations are not involved. Customize personality with `systemPrompt`, and
+research, conversation, and profile guidance with their separate prompt settings.
 
 ## Tests
 

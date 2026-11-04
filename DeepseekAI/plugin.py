@@ -645,7 +645,8 @@ class DeepseekAI(callbacks.Plugin):
                             return
                         call_sources.append((call, found))
                         for source in found:
-                            all_sources[source["url"]] = source
+                            host = urlsplit(source["url"]).hostname.lower().removeprefix("www.")
+                            all_sources.setdefault(host, source)
                     sources = sorted(all_sources.values(),
                                      key=lambda source: (source["rerank_score"], source["authority"]),
                                      reverse=True)[:3]

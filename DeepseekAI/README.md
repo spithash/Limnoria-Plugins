@@ -323,19 +323,20 @@ The default allowance is **15 web attempts per day for the entire bot**. It is
 saved with usage counters, survives reloads and restarts, and resets at midnight
 in the bot's local timezone. Failed searches and failed subsequent completions
 also consume an attempt. Web questions also count toward existing request and
-token limits and share cooldowns and concurrency slots with `@ai`. There is at
-most one search per question, with no automatic retries or additional fetch
-calls. Search failures or exhausted allowances stop the web answer with a notice
-instead of falling back to unverified model knowledge. `@DeepseekAI aiusage` shows the shared
-web counter; the owner command `resetusage` also resets this counter.
+token limits and share cooldowns and concurrency slots with `@ai`. There are at
+most three searches per question; their results are combined, deduplicated by
+host, and limited to three sources. The daily counter charges one web attempt
+per question, regardless of how many searches it makes. Calls are not
+automatically retried, and the plugin makes no additional fetch calls. Search
+failures or exhausted allowances stop the web answer with a notice instead of
+falling back to unverified model knowledge. `@DeepseekAI aiusage` shows the
+shared web counter; the owner command `resetusage` also resets this counter.
 
-At the published price of $0.75 per 1,000 successful searches, 15 searches daily
-cost at most about $0.34 in search fees over 30 days, plus normal model input and
-output charges. Search summaries add input tokens. See the
-[Search & Fetch guide](https://api-docs.deepseek.com/guides/search/) for current
-pricing. Ordinary `@ai` can still answer directly when the web allowance is
-exhausted, subject to the existing shared limits. If it requests current
-evidence, it reports that verification is unavailable.
+Web search requires a configured DeepSeek API key, and API usage may incur
+charges. Search results also add input tokens to model calls. Ordinary `@ai`
+can still answer directly when the web allowance is exhausted, subject to the
+existing shared limits. If it requests current evidence, it reports that
+verification is unavailable.
 
 Change the allowance with `@config plugins.DeepseekAI.webDailyLimit 15`.
 Disable automatic searching with `@config plugins.DeepseekAI.autoWeb False`;

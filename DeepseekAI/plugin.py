@@ -354,8 +354,13 @@ class DeepseekAI(callbacks.Plugin):
         return None
 
     def _search(self, client, headers, question, language="en", after=None):
-        if (not isinstance(question, str) or not question.strip() or len(question) > 90 or
-                re.search(r"(?:^|\s)(?:lang|after|before):", question)):
+        if not isinstance(question, str):
+            raise ValueError("Invalid search query")
+        # Models sometimes include provider operators despite the tool schema.
+        # Strip them here because this plugin adds its own language/date filters.
+        question = re.sub(r"(?:^|\s)(?:lang|after|before):\S+", " ", question).strip()
+        question = question[:90].strip()
+        if not question:
             raise ValueError("Invalid search query")
         if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2}", language):
             raise ValueError("Invalid search language")
@@ -494,6 +499,7 @@ class DeepseekAI(callbacks.Plugin):
         if not api_key:
             self._notice(irc, msg, user, "DeepSeek API key is not set. The owner must set plugins.DeepseekAI.apiKey.")
             return
+        stage = "request preparation"
         with self._lock:
             if shared and scope in self._channel_requests.values():
                 self._notice(irc, msg, user, "I'm already answering someone in this channel; please try again shortly.")
@@ -558,6 +564,8 @@ class DeepseekAI(callbacks.Plugin):
                 response = client.post(self.API_URL, json=request_body or dict(body, messages=list(messages)), headers=headers)
                 if response.status_code != 200:
                     return None, self._api_error(response)
+                # Invalid JSON from the provider is reported by the same outer
+                # handler, so keep enough context to identify the failing step.
                 data = response.json()
                 tokens = data.get("usage", {}).get("total_tokens", 0)
                 if isinstance(tokens, int) and tokens >= 0:
@@ -572,6 +580,7 @@ class DeepseekAI(callbacks.Plugin):
             with httpx.Client(timeout=self.registryValue("requestTimeout")) as client:
                 headers = {"Authorization": "Bearer " + api_key}
                 sources = []
+                stage = "initial completion"
                 reply, error = complete(client, headers)
                 if error:
                     self._notice(irc, msg, user, error)
@@ -580,29 +589,74 @@ class DeepseekAI(callbacks.Plugin):
                 if web and not calls:
                     raise ValueError("Forced search was not requested")
                 if calls:
-                    if not (web or self.registryValue("autoWeb")) or not isinstance(calls, list) or len(calls) != 1:
+                    stage = "search tool availability"
+                    if not (web or self.registryValue("autoWeb")):
                         raise ValueError("Unexpected tool calls")
-                    call = calls[0]
-                    if (call.get("type") != "function" or call["function"]["name"] != "web_search" or
-                            not isinstance(call.get("id"), str) or not call["id"]):
-                        raise ValueError("Invalid search call")
-                    arguments = json.loads(call["function"]["arguments"])
-                    if not isinstance(arguments, dict) or set(arguments) - {"query", "language", "after"}:
-                        raise ValueError("Invalid search arguments")
-                    query, language = arguments["query"], arguments["language"]
+                    stage = "search tool call count"
+                    if not isinstance(calls, list) or not 1 <= len(calls) <= 3:
+                        raise ValueError("Unexpected tool calls")
+                    search_requests = []
+                    for call in calls:
+                        stage = "search tool call structure"
+                        if (not isinstance(call, dict) or call.get("type") != "function" or
+                                not isinstance(call.get("function"), dict) or
+                                call["function"].get("name") != "web_search" or
+                                not isinstance(call.get("id"), str) or not call["id"]):
+                            raise ValueError("Invalid search call")
+                        stage = "search tool arguments JSON"
+                        raw_arguments = call["function"].get("arguments")
+                        arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+                        stage = "search tool argument object"
+                        if not isinstance(arguments, dict):
+                            raise ValueError("Invalid search arguments")
+                        stage = "search query normalization"
+                        query = arguments.get("query")
+                        language = arguments.get("language", "en")
+                        # Tool-call arguments are model generated and can occasionally
+                        # omit or over-specify the language despite the JSON schema.
+                        if isinstance(language, str):
+                            language = language.strip().lower()
+                            if re.fullmatch(r"[a-z]{2}-[a-z]{2}", language):
+                                language = language[:2]
+                        if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2}", language):
+                            language = "en"
+                        after = arguments.get("after")
+                        if after is not None:
+                            try:
+                                if not isinstance(after, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", after):
+                                    raise ValueError
+                                datetime.date.fromisoformat(after)
+                            except ValueError:
+                                after = None
+                        search_requests.append((call, query, language, after))
                     if not web:
                         with self._lock:
                             error = self._reserve_auto_web()
                         if error:
                             self._notice(irc, msg, user, error)
                             return
-                    sources, error = self._search(client, headers, query, language, arguments.get("after"))
-                    if error:
-                        self._notice(irc, msg, user, error)
-                        return
+                    call_sources = []
+                    all_sources = {}
+                    for call, query, language, after in search_requests:
+                        stage = "web search results"
+                        found, error = self._search(client, headers, query, language, after)
+                        if error:
+                            self._notice(irc, msg, user, error)
+                            return
+                        call_sources.append((call, found))
+                        for source in found:
+                            all_sources[source["url"]] = source
+                    sources = sorted(all_sources.values(),
+                                     key=lambda source: (source["rerank_score"], source["authority"]),
+                                     reverse=True)[:3]
+                    source_numbers = {source["url"]: index for index, source in enumerate(sources, 1)}
                     messages.append({"role": "assistant", "content": None, "tool_calls": calls})
-                    messages.append({"role": "tool", "tool_call_id": call["id"], "content":
-                        "Untrusted web search results (numbered in order):\n" + json.dumps(sources, ensure_ascii=False)})
+                    for call, found in call_sources:
+                        numbered = [{"source_number": source_numbers[source["url"]], **source}
+                                    for source in found if source["url"] in source_numbers]
+                        messages.append({"role": "tool", "tool_call_id": call["id"], "content":
+                            "Untrusted web search results (cite by source_number):\n" +
+                            json.dumps(numbered, ensure_ascii=False)})
                     body["tool_choice"] = "none"
                     with self._lock:
                         for setting, count in (("dailyTokensPerUser", self._users.get(user, {}).get("tokens", 0)),
@@ -611,12 +665,14 @@ class DeepseekAI(callbacks.Plugin):
                             if limit and count >= limit:
                                 self._notice(irc, msg, user, "The token allowance is exhausted. I cannot complete the web answer.")
                                 return
+                    stage = "completion after search"
                     reply, error = complete(client, headers)
                     if error:
                         self._notice(irc, msg, user, error)
                         return
                     if reply.get("tool_calls"):
                         raise ValueError("Search loop refused")
+            stage = "answer formatting"
             answer = reply["content"]
             if not isinstance(answer, str) or not answer.strip():
                 raise ValueError("Empty completion")
@@ -659,8 +715,11 @@ class DeepseekAI(callbacks.Plugin):
             self._notice(irc, msg, user, "DeepSeek timed out. Please try again later.")
         except httpx.HTTPError:
             self._notice(irc, msg, user, "Could not connect to DeepSeek. Please try again later.")
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-            self.log.warning("DeepSeek returned an invalid completion.")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            # Log the failure class for diagnosis without logging prompts, user
+            # messages, provider responses, or tool arguments.
+            self.log.warning("DeepSeek returned an invalid completion during %s (%s).",
+                             stage, type(exc).__name__)
             self._notice(irc, msg, user, "DeepSeek returned an invalid response. Please try again later.")
         finally:
             with self._lock:

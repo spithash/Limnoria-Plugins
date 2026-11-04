@@ -86,7 +86,8 @@ conf.registerGlobalValue(DeepseekAI, "greyItalics", registry.Boolean(
 conf.registerGlobalValue(DeepseekAI, "autoWeb", registry.Boolean(
     True, "Let @ai and nick prompts search when current information is needed."))
 conf.registerGlobalValue(DeepseekAI, "webShowUrls", registry.Boolean(
-    True, "Include up to two cited source links in web answers; False shows source domains."))
+    True, "Allow up to two higher-authority retrieved links only when explicitly requested, "
+    "each on its own IRC line. False disables all source links. Unsolicited/model URLs are always removed."))
 
 
 class HistoryMode(registry.OnlySomeStrings):

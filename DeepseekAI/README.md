@@ -164,7 +164,7 @@ See the [DeepSeek API documentation](https://api-docs.deepseek.com/api/create-ch
 | Command | Purpose |
 | --- | --- |
 | `@ai <question>` | Ask DeepSeek with your recent context; search automatically when needed. |
-| `@aiweb <question>` | Always search the web and answer with sources. |
+| `@aiweb <question>` | Always search the web. Ask for links explicitly to display URLs. |
 | `@DeepseekAI history [channel] on\|off` | Enable/disable history in a target channel on this network; owner only. |
 | `@DeepseekAI profiling [channel] on\|off` | Enable/disable profile learning/use in a target channel on this network; owner only. |
 | `@DeepseekAI profile <channel> on\|off` | Alias for the owner-only channel profiling switch. |
@@ -206,7 +206,7 @@ All settings below are under `plugins.DeepseekAI`.
 | `requestTimeout` | 45 | HTTP timeout in seconds. |
 | `webDailyLimit` | 15 | Shared daily web attempts across all users, channels, and networks; 0 disables web search. |
 | `autoWeb` | True | Allow `@ai` and nick prompts to search when external evidence or current facts are needed. |
-| `webShowUrls` | True | Show up to two cited source links; False shows source domains instead. |
+| `webShowUrls` | True | Allow up to two higher-authority source links when explicitly requested, one per IRC line. False disables links entirely. |
 | `webSearchPrompt` | Research guidance | Configurable search decisions and evidence guidance, separate from personality; supports network/channel overrides. |
 | `historyEnabled` | False | Use/record conversation history; network/channel overrides, owner-controlled. |
 | `historyMode` | channel | Shared AI conversation or separate user histories; private messages always remain per user. |
@@ -313,11 +313,23 @@ distinguish forecasts from confirmed outcomes, and disclose stale, conflicting,
 or insufficient evidence. Quality metadata and publisher reputation are signals,
 not guarantees. Retrieved material is untrusted data, never instructions.
 
-Replies include only cited sources, at most two. Source footers occupy at most
-one third of the response budget. Long URLs fall back to source domains rather
-than being cut; citations lost when the answer is truncated have no footer.
-Set `webShowUrls` to False for domain-only attribution. The plugin attaches
-validated source URLs itself rather than trusting model-generated links.
+Replies omit URLs and numbered citations by default, including `aiweb` answers.
+The plugin strips model-generated URLs, Markdown destinations, and bare domains
+before formatting or truncation, even without a web search. Ask explicitly, for
+example `give me the links` or `sources?`, to request source URLs for the current
+answer; previous requests in conversation history do not enable links.
+
+Requested links always come from retrieved results, never model-generated URLs.
+Only cited results with provider authority 3 or 4 qualify; unknown or lower
+ratings are omitted. The model must also prefer relevant official primary
+sources and established reporting. This rating is a quality filter, not a
+guarantee of accuracy. If no links qualify or fit, the answer says so.
+
+At most two links are sent, each as a separate IRC message with its citation
+number. Links occupy at most half of the complete response character budget.
+Each must also fit intact within the IRC byte limit; longer URLs are omitted
+instead of shortened, split, or replaced with a domain. Citations lost when the
+answer is truncated have no link. `webShowUrls=False` disables links entirely.
 
 The default allowance is **15 web attempts per day for the entire bot**. It is
 saved with usage counters, survives reloads and restarts, and resets at midnight

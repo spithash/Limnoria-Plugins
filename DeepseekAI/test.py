@@ -647,7 +647,7 @@ class DeepseekAITestCase(ChannelPluginTestCase):
 
     def testWebCommandAndPayload(self):
         self.post.side_effect = self._web_responses()
-        self.assertResponse("aiweb latest release", "Version 2.0 [1]. [1] https://example.org/release")
+        self.assertResponse("aiweb latest release", "Version 2.0.")
         plan, search, chat = self.post.call_args_list
         self.assertEqual(plan.kwargs["json"]["tool_choice"]["function"]["name"], "web_search")
         self.assertEqual(search.args[0], plugin.DeepseekAI.SEARCH_URL)
@@ -751,7 +751,7 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         responses = self._web_responses()
         responses[0] = self._search_plan("US Senate election results 2026", after="2026-11-03")
         self.post.side_effect = responses
-        self.assertResponse("ai and who won the Senate?", "Version 2.0 [1]. [1] https://example.org/release")
+        self.assertResponse("ai and who won the Senate?", "Version 2.0.")
         plan, search, final = self.post.call_args_list
         self.assertEqual(plan.kwargs["json"]["tool_choice"], "auto")
         self.assertIn("explain elections", [m["content"] for m in plan.kwargs["json"]["messages"]])
@@ -791,7 +791,7 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.assertResponse("ai hello", "Hello from DeepSeek.")
         self.assertNotIn("tools", self.post.call_args.kwargs["json"])
         self.post.side_effect = self._web_responses()
-        self.assertResponse("aiweb latest release", "Version 2.0 [1]. [1] https://example.org/release")
+        self.assertResponse("aiweb latest release", "Version 2.0.")
 
     def testWebLongQuestionBecomesShortGreekQuery(self):
         responses = self._web_responses()
@@ -816,11 +816,19 @@ class DeepseekAITestCase(ChannelPluginTestCase):
 
     def testInvalidSearchArgumentsNeverReachSearchApi(self):
         client = self.client.return_value.__enter__.return_value
-        for query, language, after in [("x" * 91, "en", None), ("news", "en OR lang:ru", None),
-                                       ("news", "en", "2026-02-30"), ("news lang:ru", "en", None)]:
+        for query, language, after in [("", "en", None), ("news", "en OR lang:ru", None),
+                                       ("news", "en", "2026-02-30"), ("lang:ru", "en", None)]:
             with self.assertRaises(ValueError):
                 self.callback._search(client, {}, query, language, after)
         self.post.assert_not_called()
+
+    def testSearchNormalizesLongQueriesAndProviderOperators(self):
+        client = self.client.return_value.__enter__.return_value
+        self.post.return_value = httpx.Response(200, json={"results": []})
+        self.callback._search(client, {}, "x" * 91, "en")
+        self.assertEqual(self.post.call_args.kwargs["json"]["query"], "x" * 90 + " lang:en")
+        self.callback._search(client, {}, "news lang:ru after:2020-01-01", "en")
+        self.assertEqual(self.post.call_args.kwargs["json"]["query"], "news lang:en")
 
     def testWebEmptyResultsPreservePlanningTokens(self):
         self.post.side_effect = [self._search_plan(), httpx.Response(200, json={"results": []})]
@@ -838,20 +846,82 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.assertEqual(self.callback._web_attempts, 1)
         self.assertFalse(self.callback._active_users)
 
-    def testCitationsOnlyIncludeUsedSourcesAndRespectLength(self):
-        sources = [{"url": "https://one.example/a"}, {"url": "https://two.example/b"},
-                   {"url": "https://unused.example/c"}]
-        rendered, footer = self.callback._render_sources("Answer [2]. Bad [99].", sources)
-        self.assertIn("[2] https://two.example/b", footer)
+    def testUrlsAreRemovedWithoutSearchOrExplicitRequest(self):
+        self.post.return_value = httpx.Response(200, json={"choices": [{"message": {
+            "content": "Read [the docs](https://invented.example/docs) or https://bad.example/path and www.bad.example. [1]"}}]})
+        self.assertResponse("ai explain this", "Read the docs or and")
+        self.assertIn("without URLs", self.post.call_args.kwargs["json"]["messages"][0]["content"])
+        rendered, footer = self.callback._render_sources(
+            "Visit example.org/docs or <ftp://bad.example/file>.", [])
+        self.assertNotIn("example", rendered)
+        self.assertEqual(footer, "")
+        self.assertEqual(self.callback._strip_urls("Use os.path.join in plugin.py."),
+                         "Use os.path.join in plugin.py.")
+
+    def testLinkOptInUsesCurrentExplicitRequest(self):
+        for question in ("sources?", "give me a link", "show URLs please", "cite your sources",
+                         "δώσε μου τις πηγές", "στείλε συνδέσμους", "where are your sources?"):
+            self.assertTrue(self.callback._links_requested(question), question)
+        for question in ("latest news", "explain https://example.org", "show source code",
+                         "no links please", "do not include URLs", "χωρίς πηγές", "why are links broken?"):
+            self.assertFalse(self.callback._links_requested(question), question)
+
+    def testCitationsOnlyIncludeRequestedTrustedSourcesAndRespectLength(self):
+        sources = [{"url": "https://one.example/a", "authority": 1},
+                   {"url": "https://two.example/b", "authority": 4},
+                   {"url": "https://unused.example/c", "authority": 3}]
+        rendered, footer = self.callback._render_sources("Answer [2].", sources)
+        self.assertEqual((rendered, footer), ("Answer.", ""))
+        rendered, footer = self.callback._render_sources(
+            "Answer [1] [2]. Bad [99].", sources, links_requested=True)
+        self.assertEqual(footer, "\n[2] https://two.example/b")
+        self.assertNotIn("[1]", rendered)
         self.assertNotIn("[99]", rendered)
-        self.assertNotIn("one.example", footer)
         self.assertNotIn("unused", footer)
         conf.supybot.plugins.DeepseekAI.webShowUrls.setValue(False)
-        rendered, footer = self.callback._render_sources("Answer [2].", sources)
-        self.assertEqual(footer, " [2] two.example")
-        rendered, footer = self.callback._render_sources("Answer " + "x" * 1000 + " [2]", sources)
+        rendered, footer = self.callback._render_sources(
+            "Answer [2].", sources, links_requested=True)
+        self.assertEqual(footer, "")
+        self.assertIn("No suitable source links", rendered)
+
+    def testRequestedUrlsAreNeverTruncatedOrSplit(self):
+        sources = [{"url": "https://two.example/" + "x" * 400, "authority": 4}]
+        rendered, footer = self.callback._render_sources(
+            "Answer [1].", sources, links_requested=True, line_limit=300)
+        self.assertEqual(footer, "")
+        self.assertIn("No suitable source links", rendered)
+        sources = [{"url": "https://two.example/" + "α" * 100, "authority": 4}]
+        rendered, footer = self.callback._render_sources(
+            "Answer [1].", sources, links_requested=True, line_limit=150)
+        self.assertEqual(footer, "")
+        sources = [{"url": "https://two.example/b", "authority": 4}]
+        rendered, footer = self.callback._render_sources(
+            "Answer " + "x" * 1000 + " [1]", sources, links_requested=True)
         self.assertEqual(footer, "")
         self.assertLessEqual(len(rendered + footer), 800)
+        rendered, footer = self.callback._render_sources(
+            "Answer [1].", sources, limit=80, links_requested=True)
+        self.assertLessEqual(len(rendered + footer), 80)
+
+    def testRequestedLinksAreSeparateIrcMessages(self):
+        responses = self._web_responses()
+        responses[1] = httpx.Response(200, json={"results": [
+            {"title": "Official", "url": "https://official.example/release", "authority": 4},
+            {"title": "Reporting", "url": "https://news.example/release", "authority": 3}]})
+        responses[-1] = httpx.Response(200, json={"choices": [{"message": {
+            "content": "Version 2.0 [1] [2]. https://invented.example/"}}]})
+        self.post.side_effect = responses
+        self.assertResponse("ai give me links for the latest release", "Version 2.0 [1] [2].")
+        first, second = self.irc.takeMsg(), self.irc.takeMsg()
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first.args[1], "[1] https://official.example/release")
+        self.assertEqual(second.args[1], "[2] https://news.example/release")
+        self.assertEqual(self.post.call_args_list[0].kwargs["json"]["tool_choice"]["function"]["name"], "web_search")
+        self.post.side_effect = None
+        self.post.return_value = httpx.Response(200, json={"choices": [{"message": {"content": "Next answer."}}]})
+        self.assertResponse("ai explain further", "Next answer.")
+        self.assertIn("without URLs", self.post.call_args.kwargs["json"]["messages"][0]["content"])
 
     def testWarningFloodSuppression(self):
         irc = Mock()
@@ -971,14 +1041,17 @@ class DeepseekAITestCase(ChannelPluginTestCase):
         self.originals.setdefault(value, value())
         value.setValue(215)
         irc = Mock(network=self.irc.network)
+        irc._replyOverhead.return_value = 80
         msg = ircmsgs.privmsg(self.channel, "@aiweb news", prefix=self.prefix)
         msg.channel = self.channel
         responses = self._web_responses()
+        responses[1] = httpx.Response(200, json={"results": [{
+            "title": "Release", "url": "https://example.org/release", "authority": 4}]})
         responses[-1] = httpx.Response(200, json={"choices": [{"message": {
             "content": "**Current result** [1]. " + "Long explanation. " * 100}}]})
         self.post.side_effect = responses
-        self.callback._query(irc, msg, "news", web=True)
-        answer = irc.reply.call_args.args[0]
+        self.callback._query(irc, msg, "news, give me links", web=True)
+        answer = "\n".join(call.args[0] for call in irc.reply.call_args_list)
         self.assertLessEqual(len(answer), 215)
         self.assertIn("[1] https://example.org/release", answer)
         self.assertIn("\x02", answer)

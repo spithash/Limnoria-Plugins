@@ -65,8 +65,11 @@ creates a baseline and does not announce existing posts. Later checks announce
 new posts oldest-first, for example:
 
 ```text
-[r/rtlsdr] New SDR receiver released https://www.reddit.com/r/RTLSDR/comments/...
+**[r/rtlsdr]** New SDR receiver released https://www.reddit.com/r/RTLSDR/comments/...
 ```
+
+The bracketed subreddit label is sent using IRC bold formatting; the title and
+URL are unformatted.
 
 ## Free-plan request budgeting
 

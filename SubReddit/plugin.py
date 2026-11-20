@@ -261,7 +261,7 @@ class SubReddit(callbacks.Plugin):
             permalink = post.get('permalink') or post.get('url') or ''
             if permalink.startswith('/'):
                 permalink = 'https://www.reddit.com' + permalink
-            text = '[r/%s] %s %s' % (subreddit, title, permalink)
+            text = '\x02[r/%s]\x02 %s %s' % (subreddit, title, permalink)
             for target_irc, channel in destinations:
                 target_irc.queueMsg(ircmsgs.privmsg(channel, text))
         return len(new_posts)

@@ -12,3 +12,4 @@
 12. Answers questions, performs calculations, and converts units with Wolfram|Alpha --> [WolframAlpha](https://github.com/spithash/Limnoria-Plugins/tree/main/WolframAlpha)
 13. Query DeepSeek AI with optional web search, conversation history, and user profiles --> [DeepseekAI](https://github.com/spithash/Limnoria-Plugins/tree/main/DeepseekAI)
 14. Amateur radio tools for propagation, spots, satellites, launches, aviation, astronomy, QSL activity, and offline radio utilities --> [Radiohead](https://github.com/spithash/Limnoria-Plugins/tree/main/Radiohead)
+15. Subscribe IRC channels to new subreddit posts through RedListen --> [SubReddit](https://github.com/spithash/Limnoria-Plugins/tree/main/SubReddit)

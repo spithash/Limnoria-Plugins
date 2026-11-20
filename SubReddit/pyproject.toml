@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "limnoria-subreddit"
+version = "0.0.0"
+authors = [
+    { name = "spithash @ Libera" }
+]
+readme = "README.md"
+dependencies = [
+    "limnoria",
+    "requests",
+]
+classifiers = [
+    'Environment :: Plugins',
+    'Programming Language :: Python :: 3',
+    'Topic :: Communications :: Chat',
+]
+
+[project.entry-points.'limnoria.plugins']
+SubReddit = "limnoria_subreddit"
+
+[tool.setuptools.package-dir]
+"limnoria_subreddit" = "."
+"limnoria_subreddit.local" = "local/"
+
+[tool.setuptools.package-data]
+"limnoria_subreddit" = ["locales/*.po"]
